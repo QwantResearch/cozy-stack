@@ -47,7 +47,7 @@ type photoAlbum struct {
 // var typeMap map[string]interface{}
 
 var mapIndexType map[string]string
-var indexAlias bleve.Index
+var indexAlias bleve.IndexAlias
 var inst *instance.Instance
 
 func StartIndex(instance *instance.Instance) error {
@@ -59,25 +59,45 @@ func StartIndex(instance *instance.Instance) error {
 		"bleve/bank.accounts.bleve": "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
 	}
 
+	LoadModel("pkg/index/lid.176.ftz")
+
 	var err error
 
-	photoAlbumIndex, err := GetIndex("bleve/photo.albums.bleve")
-	if err != nil {
-		return err
-	}
+	languages := GetAvailableLanguages()
 
-	fileIndex, err := GetIndex("bleve/file.bleve")
-	if err != nil {
-		return err
-	}
+	photoAlbumIndex := make(map[string]*bleve.Index, len(languages))
+	fileIndex := make(map[string]*bleve.Index, len(languages))
+	bankAccountIndex := make(map[string]*bleve.Index, len(languages))
 
-	bankAccountIndex, err := GetIndex("bleve/bank.accounts.bleve")
-	if err != nil {
-		return err
+	for _, lang := range languages {
+		photoAlbumIndex[lang], err = GetIndex("bleve/photo.albums.bleve", lang)
+		if err != nil {
+			return err
+		}
+
+		fileIndex[lang], err = GetIndex("bleve/file.bleve", lang)
+		if err != nil {
+			return err
+		}
+
+		bankAccountIndex[lang], err = GetIndex("bleve/bank.accounts.bleve", lang)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Creating an aliasIndex to make it clear to the user:
-	indexAlias = bleve.NewIndexAlias(photoAlbumIndex, fileIndex, bankAccountIndex)
+
+	indexAlias = bleve.NewIndexAlias()
+	for _, i := range photoAlbumIndex {
+		indexAlias.Add(*i)
+	}
+	for _, i := range fileIndex {
+		indexAlias.Add(*i)
+	}
+	for _, i := range bankAccountIndex {
+		indexAlias.Add(*i)
+	}
 
 	// subscribing to changes
 	eventChan := realtime.GetHub().Subscriber(inst)
@@ -87,15 +107,19 @@ func StartIndex(instance *instance.Instance) error {
 
 	go func() {
 		for ev := range eventChan.Channel {
+
+			doc := ev.Doc.(couchdb.JSONDoc)
+			lang := GetLanguage(doc.M["name"].(string))
+
 			var originalIndex *bleve.Index
 			if ev.Doc.DocType() == "io.cozy.photos.albums" {
-				originalIndex = &photoAlbumIndex
+				originalIndex = photoAlbumIndex[lang]
 			}
 			if ev.Doc.DocType() == "io.cozy.files" {
-				originalIndex = &fileIndex
+				originalIndex = fileIndex[lang]
 			}
 			if ev.Doc.DocType() == "io.cozy.bank.accounts" {
-				originalIndex = &bankAccountIndex
+				originalIndex = bankAccountIndex[lang]
 			}
 			if ev.Verb == "CREATED" || ev.Verb == "UPDATED" {
 				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
@@ -113,35 +137,35 @@ func StartIndex(instance *instance.Instance) error {
 	return nil
 }
 
-func GetIndex(indexPath string) (bleve.Index, error) {
+func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
-	AddTypeMapping(indexMapping, mapIndexType[indexPath])
+	AddTypeMapping(indexMapping, mapIndexType[indexPath], lang)
 
 	blevePath := indexPath
 
-	i, err1 := bleve.Open(blevePath)
+	i, err1 := bleve.Open(blevePath + "." + lang)
 
 	// Create it if it doesn't exist
 	if err1 == bleve.ErrorIndexPathDoesNotExist {
 		fmt.Printf("Creating new index %s...\n", indexPath)
-		i, err2 := bleve.New(blevePath, indexMapping)
+		i, err2 := bleve.New(blevePath+"."+lang, indexMapping)
 		if err2 != nil {
 			fmt.Printf("Error on creating new Index: %s\n", err2)
-			return i, err2
+			return &i, err2
 		}
-		FillIndex(i, mapIndexType[indexPath])
-		return i, nil
+		FillIndex(i, mapIndexType[indexPath], lang)
+		return &i, nil
 
 	} else if err1 != nil {
 		fmt.Printf("Error on creating new Index %s: %s\n", indexPath, err1)
-		return i, err1
+		return &i, err1
 	}
 
 	fmt.Println("found existing Index")
-	return i, nil
+	return &i, nil
 }
 
-func FillIndex(index bleve.Index, docType string) {
+func FillIndex(index bleve.Index, docType string, lang string) {
 
 	// Which solution to use ?
 	// Either a common struct (such as JSONDoc) or a struct by type of document ?
@@ -183,12 +207,14 @@ func FillIndex(index bleve.Index, docType string) {
 	batch := index.NewBatch()
 	GetFileDocs(docType, &docs)
 	for i := range docs {
-		docs[i].M["DocType"] = docType
-		batch.Index(docs[i].ID(), docs[i].M)
+		if GetLanguage(docs[i].M["name"].(string)) == lang {
+			docs[i].M["DocType"] = docType
+			batch.Index(docs[i].ID(), docs[i].M)
+		}
 	}
 	index.Batch(batch)
 	end := time.Since(start)
-	fmt.Println(docType, " indexing time: ", end, " for ", len(docs), " documents")
+	fmt.Println(docType, "indexing time:", end, "for", len(docs), "documents", lang)
 
 }
 

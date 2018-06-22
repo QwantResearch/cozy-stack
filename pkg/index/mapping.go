@@ -2,35 +2,41 @@ package index
 
 import (
 	"github.com/blevesearch/bleve"
+	"github.com/blevesearch/bleve/analysis/lang/en"
+	"github.com/blevesearch/bleve/analysis/lang/fr"
 	"github.com/blevesearch/bleve/mapping"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	// "github.com/blevesearch/bleve/analysis/analyzer/simple" // Might be useful to check for other Analyzers (maybe make one ourselves)
 )
 
-func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string) {
+func GetAvailableLanguages() []string {
+	return []string{fr.AnalyzerName, en.AnalyzerName}
+}
+
+func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string) {
 
 	// For each type of document, don't forget to Add Document Disable Mapping on useless fields
 	// It affects performances a lot
 
 	switch docType {
 	case consts.PhotosAlbums:
-		indexMapping = AddPhotoAlbumMapping(indexMapping)
+		indexMapping = AddPhotoAlbumMapping(indexMapping, lang)
 		break
 	case consts.Files:
-		indexMapping = AddFileMapping(indexMapping)
+		indexMapping = AddFileMapping(indexMapping, lang)
 		break
 	case "io.cozy.bank.accounts":
-		indexMapping = AddBankAccountMapping(indexMapping)
+		indexMapping = AddBankAccountMapping(indexMapping, lang)
 		break
 	}
 	indexMapping.TypeField = "DocType"
 }
 
-func AddPhotoAlbumMapping(indexMapping *mapping.IndexMappingImpl) *mapping.IndexMappingImpl {
+func AddPhotoAlbumMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
 	photosAlbumMapping := bleve.NewDocumentMapping()
 
 	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	// englishTextFieldMapping.Analyzer = "en"
+	englishTextFieldMapping.Analyzer = lang
 	// englishTextFieldMapping.IncludeInAll = true
 
 	photosAlbumMapping.AddFieldMappingsAt("name", englishTextFieldMapping)
@@ -40,12 +46,12 @@ func AddPhotoAlbumMapping(indexMapping *mapping.IndexMappingImpl) *mapping.Index
 	return indexMapping
 }
 
-func AddFileMapping(indexMapping *mapping.IndexMappingImpl) *mapping.IndexMappingImpl {
+func AddFileMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
 	fileMapping := bleve.NewDocumentMapping()
 
 	// Type fields mapping
 	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	englishTextFieldMapping.Analyzer = "en"
+	englishTextFieldMapping.Analyzer = lang
 	englishTextFieldMapping.IncludeInAll = true
 
 	fileMapping.AddFieldMappingsAt("name", englishTextFieldMapping)
@@ -77,11 +83,11 @@ func AddFileMapping(indexMapping *mapping.IndexMappingImpl) *mapping.IndexMappin
 	return indexMapping
 }
 
-func AddBankAccountMapping(indexMapping *mapping.IndexMappingImpl) *mapping.IndexMappingImpl {
+func AddBankAccountMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
 	BankAccountMapping := bleve.NewDocumentMapping()
 
 	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	englishTextFieldMapping.Analyzer = "en"
+	englishTextFieldMapping.Analyzer = lang
 	englishTextFieldMapping.IncludeInAll = true
 
 	simpleMapping := bleve.NewTextFieldMapping()
