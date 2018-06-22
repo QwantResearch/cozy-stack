@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -305,7 +306,7 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 	var currFetched couchdb.JSONDoc
 	for _, result := range searchResults.Hits {
 		currFetched = couchdb.JSONDoc{}
-		couchdb.GetDoc(inst, mapIndexType[result.Index[:len(result.Index)-3]], result.ID, &currFetched)
+		couchdb.GetDoc(inst, mapIndexType[result.Index[strings.LastIndex(result.Index, "/")+1:]], result.ID, &currFetched)
 		fetched = append(fetched, currFetched)
 	}
 
