@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/realtime"
+	"github.com/cozy/cozy-stack/pkg/vfs"
 )
 
 type file struct {
@@ -54,9 +55,9 @@ func StartIndex(instance *instance.Instance) error {
 	inst = instance
 
 	mapIndexType = map[string]string{
-		"bleve/photo.albums.bleve":  consts.PhotosAlbums,
-		"bleve/file.bleve":          consts.Files,
-		"bleve/bank.accounts.bleve": "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
+		"photo.albums.bleve":  consts.PhotosAlbums,
+		"file.bleve":          consts.Files,
+		"bank.accounts.bleve": "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
 	}
 
 	LoadModel("pkg/index/lid.176.ftz")
@@ -70,17 +71,17 @@ func StartIndex(instance *instance.Instance) error {
 	bankAccountIndex := make(map[string]*bleve.Index, len(languages))
 
 	for _, lang := range languages {
-		photoAlbumIndex[lang], err = GetIndex("bleve/photo.albums.bleve", lang)
+		photoAlbumIndex[lang], err = GetIndex("photo.albums.bleve", lang)
 		if err != nil {
 			return err
 		}
 
-		fileIndex[lang], err = GetIndex("bleve/file.bleve", lang)
+		fileIndex[lang], err = GetIndex("file.bleve", lang)
 		if err != nil {
 			return err
 		}
 
-		bankAccountIndex[lang], err = GetIndex("bleve/bank.accounts.bleve", lang)
+		bankAccountIndex[lang], err = GetIndex("bank.accounts.bleve", lang)
 		if err != nil {
 			return err
 		}
@@ -108,26 +109,62 @@ func StartIndex(instance *instance.Instance) error {
 	go func() {
 		for ev := range eventChan.Channel {
 
-			doc := ev.Doc.(couchdb.JSONDoc)
-			lang := GetLanguage(doc.M["name"].(string))
-
 			var originalIndex *bleve.Index
-			if ev.Doc.DocType() == "io.cozy.photos.albums" {
-				originalIndex = photoAlbumIndex[lang]
-			}
-			if ev.Doc.DocType() == "io.cozy.files" {
-				originalIndex = fileIndex[lang]
-			}
-			if ev.Doc.DocType() == "io.cozy.bank.accounts" {
-				originalIndex = bankAccountIndex[lang]
-			}
-			if ev.Verb == "CREATED" || ev.Verb == "UPDATED" {
+			if ev.Verb == "CREATED" {
+				doc := ev.Doc.(*vfs.FileDoc)
+				lang := GetLanguage(doc.Name())
+
+				if ev.Doc.DocType() == "io.cozy.photos.albums" {
+					originalIndex = photoAlbumIndex[lang]
+				}
+				if ev.Doc.DocType() == "io.cozy.files" {
+					originalIndex = fileIndex[lang]
+				}
+				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
+					originalIndex = bankAccountIndex[lang]
+				}
+
+				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
+				fmt.Println(ev.Doc)
+				fmt.Println("indexed")
+
+			} else if ev.Verb == "UPDATED" {
+
+				// To make it easier, we assume that language doesn't change and we find original index
+				if ev.Doc.DocType() == "io.cozy.photos.albums" {
+					originalIndex = FindIndexDoc(photoAlbumIndex, ev.Doc.ID())
+				}
+				if ev.Doc.DocType() == "io.cozy.files" {
+					originalIndex = FindIndexDoc(fileIndex, ev.Doc.ID())
+				}
+				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
+					originalIndex = FindIndexDoc(bankAccountIndex, ev.Doc.ID())
+				}
+
+				if originalIndex == nil {
+					fmt.Println("Error retrieving the Index")
+				}
+
 				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
 				fmt.Println(ev.Doc)
 				fmt.Println("reindexed")
+
 			} else if ev.Verb == "DELETED" {
-				indexAlias.Delete(ev.Doc.ID())
+
+				if ev.Doc.DocType() == "io.cozy.photos.albums" {
+					originalIndex = FindIndexDoc(photoAlbumIndex, ev.Doc.ID())
+				}
+				if ev.Doc.DocType() == "io.cozy.files" {
+					originalIndex = FindIndexDoc(fileIndex, ev.Doc.ID())
+				}
+				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
+					originalIndex = FindIndexDoc(bankAccountIndex, ev.Doc.ID())
+				}
+
+				err := (*originalIndex).Delete(ev.Doc.ID())
+				fmt.Println(err)
 				fmt.Println("deleted")
+
 			} else {
 				fmt.Println(ev.Verb)
 			}
@@ -137,18 +174,28 @@ func StartIndex(instance *instance.Instance) error {
 	return nil
 }
 
+func FindIndexDoc(indexList map[string]*bleve.Index, id string) *bleve.Index {
+	for _, i := range indexList {
+		doc, _ := (*i).Document(id)
+		if doc != nil {
+			return i
+		}
+	}
+	return nil
+}
+
 func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
 	AddTypeMapping(indexMapping, mapIndexType[indexPath], lang)
 
-	blevePath := indexPath
+	fullIndexPath := "bleve/" + lang + "/" + indexPath
 
-	i, err1 := bleve.Open(blevePath + "." + lang)
+	i, err1 := bleve.Open(fullIndexPath)
 
 	// Create it if it doesn't exist
 	if err1 == bleve.ErrorIndexPathDoesNotExist {
-		fmt.Printf("Creating new index %s...\n", indexPath)
-		i, err2 := bleve.New(blevePath+"."+lang, indexMapping)
+		fmt.Printf("Creating new index %s...\n", fullIndexPath)
+		i, err2 := bleve.New(fullIndexPath, indexMapping)
 		if err2 != nil {
 			fmt.Printf("Error on creating new Index: %s\n", err2)
 			return &i, err2
@@ -157,7 +204,7 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 		return &i, nil
 
 	} else if err1 != nil {
-		fmt.Printf("Error on creating new Index %s: %s\n", indexPath, err1)
+		fmt.Printf("Error on creating new Index %s: %s\n", fullIndexPath, err1)
 		return &i, err1
 	}
 
@@ -203,18 +250,20 @@ func FillIndex(index bleve.Index, docType string, lang string) {
 
 	// Indexation Batch Time
 	start := time.Now()
+	count := 0
 	var docs []couchdb.JSONDoc
 	batch := index.NewBatch()
 	GetFileDocs(docType, &docs)
 	for i := range docs {
 		if GetLanguage(docs[i].M["name"].(string)) == lang {
+			count += 1
 			docs[i].M["DocType"] = docType
 			batch.Index(docs[i].ID(), docs[i].M)
 		}
 	}
 	index.Batch(batch)
 	end := time.Since(start)
-	fmt.Println(docType, "indexing time:", end, "for", len(docs), "documents", lang)
+	fmt.Println(docType, "indexing time:", end, "for", count, "documents", lang)
 
 }
 
@@ -256,7 +305,7 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 	var currFetched couchdb.JSONDoc
 	for _, result := range searchResults.Hits {
 		currFetched = couchdb.JSONDoc{}
-		couchdb.GetDoc(inst, mapIndexType[result.Index], result.ID, &currFetched)
+		couchdb.GetDoc(inst, mapIndexType[result.Index[:len(result.Index)-3]], result.ID, &currFetched)
 		fetched = append(fetched, currFetched)
 	}
 
