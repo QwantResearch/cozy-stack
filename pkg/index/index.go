@@ -112,7 +112,9 @@ func StartIndex(instance *instance.Instance) error {
 
 			var originalIndex *bleve.Index
 			if ev.Verb == "CREATED" {
+				// TODO : Change casting to the right one
 				doc := ev.Doc.(*vfs.FileDoc)
+				// TODO : detect language on the fields depending on the doctype, and not just "name"
 				lang := GetLanguage(doc.Name())
 
 				if ev.Doc.DocType() == "io.cozy.photos.albums" {
@@ -256,6 +258,8 @@ func FillIndex(index bleve.Index, docType string, lang string) {
 	batch := index.NewBatch()
 	GetFileDocs(docType, &docs)
 	for i := range docs {
+
+		// TODO : detect language on the fields depending on the doctype, and not just "name"
 		if GetLanguage(docs[i].M["name"].(string)) == lang {
 			count += 1
 			docs[i].M["DocType"] = docType
