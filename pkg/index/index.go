@@ -11,7 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/realtime"
-	"github.com/cozy/cozy-stack/pkg/vfs"
+	// "github.com/cozy/cozy-stack/pkg/vfs"
 )
 
 type file struct {
@@ -111,9 +111,13 @@ func StartIndex(instance *instance.Instance) error {
 		for ev := range eventChan.Channel {
 
 			var originalIndex *bleve.Index
+			originalIndex = nil
 			if ev.Verb == "CREATED" {
+
 				// TODO : Change casting to the right one
+				// + solve the problem of finding which content to predict the language on
 				doc := ev.Doc.(*vfs.FileDoc)
+
 				// TODO : detect language on the fields depending on the doctype, and not just "name"
 				lang := GetLanguage(doc.Name())
 
@@ -125,6 +129,11 @@ func StartIndex(instance *instance.Instance) error {
 				}
 				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
 					originalIndex = bankAccountIndex[lang]
+				}
+
+				if originalIndex == nil {
+					fmt.Println("DocType not supported")
+					return
 				}
 
 				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
@@ -145,7 +154,8 @@ func StartIndex(instance *instance.Instance) error {
 				}
 
 				if originalIndex == nil {
-					fmt.Println("Error retrieving the Index")
+					fmt.Println("DocType not supported")
+					return
 				}
 
 				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
@@ -162,6 +172,11 @@ func StartIndex(instance *instance.Instance) error {
 				}
 				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
 					originalIndex = FindIndexDoc(bankAccountIndex, ev.Doc.ID())
+				}
+
+				if originalIndex == nil {
+					fmt.Println("DocType not supported")
+					return
 				}
 
 				err := (*originalIndex).Delete(ev.Doc.ID())
@@ -264,6 +279,10 @@ func FillIndex(index bleve.Index, docType string, lang string) {
 			count += 1
 			docs[i].M["DocType"] = docType
 			batch.Index(docs[i].ID(), docs[i].M)
+			if i%300 == 0 {
+				index.Batch(batch)
+				batch = index.NewBatch()
+			}
 		}
 	}
 	index.Batch(batch)
