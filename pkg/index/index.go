@@ -300,6 +300,8 @@ func GetFileDocs(docType string, docs interface{}) {
 }
 
 func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
+
+	start := time.Now()
 	var fetched []couchdb.JSONDoc
 
 	query := bleve.NewQueryStringQuery(PreparingQuery(queryString))
@@ -328,10 +330,14 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 
 	var currFetched couchdb.JSONDoc
 	for _, result := range searchResults.Hits {
+		// TODO : check that the hits are not the 10 first
 		currFetched = couchdb.JSONDoc{}
 		couchdb.GetDoc(inst, mapIndexType[result.Index[strings.LastIndex(result.Index, "/")+1:]], result.ID, &currFetched)
 		fetched = append(fetched, currFetched)
 	}
+
+	end := time.Since(start)
+	fmt.Println("query time:", end)
 
 	return fetched, nil
 }
