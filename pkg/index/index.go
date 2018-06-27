@@ -240,7 +240,7 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 		return &i, err1
 	}
 
-	fmt.Println("found existing Index")
+	fmt.Println("found existing Index", indexPath, lang)
 	return &i, nil
 }
 
@@ -358,6 +358,30 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 
 func PreparingQuery(queryString string) string {
 	return "*" + queryString + "*"
+}
+
+func QueryPrefixIndex(queryString string) ([]couchdb.JSONDoc, error) {
+	var fetched []couchdb.JSONDoc
+
+	query := bleve.NewMatchPhrasePrefixQuery(queryString)
+	searchRequest := bleve.NewSearchRequest(query)
+
+	searchResults, err := indexAlias.Search(searchRequest)
+	if err != nil {
+		fmt.Printf("Error on querying: %s", err)
+		return fetched, err
+	}
+	fmt.Printf(searchResults.String())
+
+	var currFetched couchdb.JSONDoc
+	for _, result := range searchResults.Hits {
+		// TODO : check that the hits are not the 10 first
+		currFetched = couchdb.JSONDoc{}
+		couchdb.GetDoc(inst, mapIndexType[result.Index[strings.LastIndex(result.Index, "/")+1:]], result.ID, &currFetched)
+		fetched = append(fetched, currFetched)
+	}
+
+	return fetched, nil
 }
 
 func ReIndex() error {

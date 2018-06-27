@@ -16,6 +16,7 @@ import (
 
 func Routes(router *echo.Group) {
 	router.POST("/_search", SearchQuery)
+	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
 }
 
@@ -36,7 +37,35 @@ func SearchQuery(c echo.Context) error {
 
 	results, _ := index.QueryIndex(fmt.Sprint(findRequest["searchQuery"]))
 
-	fmt.Println(results)
+	for _, result := range results {
+		fmt.Println(result.M["name"])
+	}
+
+	// TODO : return the right needed infos
+	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+
+}
+
+func SearchQueryPrefix(c echo.Context) error {
+
+	// instance := middlewares.GetInstance(c)
+	var findRequest map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
+		return jsonapi.NewError(http.StatusBadRequest, err)
+	}
+
+	// TODO : see how to deal with permissions
+	// if err := permissions.AllowWholeType(c, permissions.POST, consts.Files); err != nil {
+	// 	fmt.Println(err)
+	// 	return err
+	// }
+
+	results, _ := index.QueryPrefixIndex(fmt.Sprint(findRequest["searchQuery"]))
+
+	for _, result := range results {
+		fmt.Println(result.M["name"])
+	}
 
 	// TODO : return the right needed infos
 	return jsonapi.DataList(c, http.StatusOK, nil, nil)
