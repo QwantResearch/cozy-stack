@@ -362,9 +362,9 @@ func PreparingQuery(queryString string) string {
 
 func ReIndex() error {
 
-	for _, lang := range languages {
+	os.RemoveAll(prefixPath)
 
-		os.RemoveAll(prefixPath)
+	for _, lang := range languages {
 
 		// Creating new indexes
 		newPhotoAlbumIndex, err := GetIndex("photo.albums.bleve", lang)
@@ -387,7 +387,7 @@ func ReIndex() error {
 			[]bleve.Index{(*newPhotoAlbumIndex), (*newFileIndex), (*newBankAccountIndex)},
 			[]bleve.Index{*(photoAlbumIndex[lang]), *(fileIndex[lang]), *(bankAccountIndex[lang])})
 
-		// Closing all indexes
+		// Closing old indexes
 		(*photoAlbumIndex[lang]).Close()
 		(*fileIndex[lang]).Close()
 		(*bankAccountIndex[lang]).Close()
