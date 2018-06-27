@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/realtime"
-	// "github.com/cozy/cozy-stack/pkg/vfs"
+	"github.com/cozy/cozy-stack/pkg/vfs"
 )
 
 type file struct {
@@ -52,7 +53,16 @@ var mapIndexType map[string]string
 var indexAlias bleve.IndexAlias
 var inst *instance.Instance
 
+var photoAlbumIndex map[string]*bleve.Index
+var fileIndex map[string]*bleve.Index
+var bankAccountIndex map[string]*bleve.Index
+
+var languages []string
+
+var prefixPath string
+
 func StartIndex(instance *instance.Instance) error {
+
 	inst = instance
 
 	mapIndexType = map[string]string{
@@ -65,11 +75,13 @@ func StartIndex(instance *instance.Instance) error {
 
 	var err error
 
-	languages := GetAvailableLanguages()
+	languages = GetAvailableLanguages()
 
-	photoAlbumIndex := make(map[string]*bleve.Index, len(languages))
-	fileIndex := make(map[string]*bleve.Index, len(languages))
-	bankAccountIndex := make(map[string]*bleve.Index, len(languages))
+	photoAlbumIndex = make(map[string]*bleve.Index, len(languages))
+	fileIndex = make(map[string]*bleve.Index, len(languages))
+	bankAccountIndex = make(map[string]*bleve.Index, len(languages))
+
+	prefixPath = "bleve/"
 
 	for _, lang := range languages {
 		photoAlbumIndex[lang], err = GetIndex("photo.albums.bleve", lang)
@@ -206,7 +218,7 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
 	AddTypeMapping(indexMapping, mapIndexType[indexPath], lang)
 
-	fullIndexPath := "bleve/" + lang + "/" + indexPath
+	fullIndexPath := prefixPath + lang + "/" + indexPath
 
 	i, err1 := bleve.Open(fullIndexPath)
 
@@ -218,7 +230,9 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 			fmt.Printf("Error on creating new Index: %s\n", err2)
 			return &i, err2
 		}
+
 		FillIndex(i, mapIndexType[indexPath], lang)
+
 		return &i, nil
 
 	} else if err1 != nil {
@@ -344,4 +358,47 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 
 func PreparingQuery(queryString string) string {
 	return "*" + queryString + "*"
+}
+
+func ReIndex() error {
+
+	for _, lang := range languages {
+
+		os.RemoveAll(prefixPath)
+
+		// Creating new indexes
+		newPhotoAlbumIndex, err := GetIndex("photo.albums.bleve", lang)
+		if err != nil {
+			return err
+		}
+
+		newFileIndex, err := GetIndex("file.bleve", lang)
+		if err != nil {
+			return err
+		}
+
+		newBankAccountIndex, err := GetIndex("bank.accounts.bleve", lang)
+		if err != nil {
+			return err
+		}
+
+		// Swapping
+		indexAlias.Swap(
+			[]bleve.Index{(*newPhotoAlbumIndex), (*newFileIndex), (*newBankAccountIndex)},
+			[]bleve.Index{*(photoAlbumIndex[lang]), *(fileIndex[lang]), *(bankAccountIndex[lang])})
+
+		// Closing all indexes
+		(*photoAlbumIndex[lang]).Close()
+		(*fileIndex[lang]).Close()
+		(*bankAccountIndex[lang]).Close()
+
+		// Setting global var
+		photoAlbumIndex[lang] = newPhotoAlbumIndex
+		fileIndex[lang] = newFileIndex
+		bankAccountIndex[lang] = newBankAccountIndex
+
+	}
+
+	return nil
+
 }

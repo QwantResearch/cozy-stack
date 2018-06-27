@@ -16,6 +16,7 @@ import (
 
 func Routes(router *echo.Group) {
 	router.POST("/_search", SearchQuery)
+	router.POST("/_reindex", Reindex)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -38,6 +39,23 @@ func SearchQuery(c echo.Context) error {
 	fmt.Println(results)
 
 	// TODO : return the right needed infos
+	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+
+}
+
+func Reindex(c echo.Context) error {
+
+	// TODO : see how to deal with permissions
+	// if err := permissions.AllowWholeType(c, permissions.POST, consts.Files); err != nil {
+	// 	fmt.Println(err)
+	// 	return err
+	// }
+
+	err := index.ReIndex()
+	if err != nil {
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
 	return jsonapi.DataList(c, http.StatusOK, nil, nil)
 
 }
