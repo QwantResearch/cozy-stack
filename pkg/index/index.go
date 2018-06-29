@@ -61,6 +61,8 @@ var languages []string
 
 var prefixPath string
 
+var ft_language *FastText
+
 func StartIndex(instance *instance.Instance) error {
 
 	inst = instance
@@ -71,7 +73,8 @@ func StartIndex(instance *instance.Instance) error {
 		"bank.accounts.bleve": "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
 	}
 
-	LoadModel("pkg/index/lid.176.ftz")
+	ft_language = NewFastTextInst()
+	ft_language.LoadModel("pkg/index/lid.176.ftz")
 
 	var err error
 
@@ -131,7 +134,10 @@ func StartIndex(instance *instance.Instance) error {
 				doc := ev.Doc.(*vfs.FileDoc)
 
 				// TODO : detect language on the fields depending on the doctype, and not just "name"
-				lang := GetLanguage(doc.Name())
+				lang, err := ft_language.GetLanguage(doc.Name())
+				if err != nil {
+					fmt.Printf("Error on language prediction:  %s\n", err)
+				}
 
 				if ev.Doc.DocType() == "io.cozy.photos.albums" {
 					originalIndex = photoAlbumIndex[lang]
@@ -289,7 +295,11 @@ func FillIndex(index bleve.Index, docType string, lang string) {
 	for i := range docs {
 
 		// TODO : detect language on the fields depending on the doctype, and not just "name"
-		if GetLanguage(docs[i].M["name"].(string)) == lang {
+		pred, err := ft_language.GetLanguage(docs[i].M["name"].(string))
+		if err != nil {
+			fmt.Printf("Error on language prediction:  %s\n", err)
+		}
+		if pred == lang {
 			count += 1
 			docs[i].M["DocType"] = docType
 			batch.Index(docs[i].ID(), docs[i].M)
