@@ -22,7 +22,7 @@ func (f *FastText) GetLanguage(sentence string) (string, error) {
 	preds, err := f.PredictK(sentence, 164)
 	if err != nil {
 		fmt.Println(err)
-		return "en", nil
+		return "", err
 	}
 
 	for _, lang := range preds {
