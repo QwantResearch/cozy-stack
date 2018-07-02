@@ -122,6 +122,8 @@ func StartIndex(instance *instance.Instance) error {
 		eventChan.Subscribe(value)
 	}
 
+	ReplicateAll()
+
 	go func() {
 		for ev := range eventChan.Channel {
 
@@ -435,4 +437,57 @@ func ReIndex() error {
 
 	return nil
 
+}
+
+func ReplicateAll() error {
+	start := time.Now()
+	var count uint64
+	count = 0
+
+	for _, lang := range languages {
+		for _, index := range []map[string]*bleve.Index{fileIndex, photoAlbumIndex, bankAccountIndex} {
+			tmp, _ := (*index[lang]).DocCount()
+			count += tmp
+			err := Replicate(index[lang], (*index[lang]).Name()+"/store.save")
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	fmt.Println("Storage replication time:", time.Since(start), "for", count, "documents")
+	return nil
+}
+
+func Replicate(index *bleve.Index, path string) error {
+	_, store, err := (*index).Advanced()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	r, err := store.Reader()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	f, _ := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	err = r.WriteTo(f)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	err = f.Close()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	err = r.Close()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	return nil
 }
