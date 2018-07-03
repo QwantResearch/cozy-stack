@@ -124,6 +124,9 @@ func StartIndex(instance *instance.Instance) error {
 
 	ReplicateAll()
 
+	// TODO: call StoreSeq qui right sequence number for each index + update it
+	StoreSeq(photoAlbumIndex["fr"], "123456789")
+
 	go func() {
 		for ev := range eventChan.Channel {
 
@@ -490,4 +493,12 @@ func Replicate(index *bleve.Index, path string) error {
 	}
 
 	return nil
+}
+
+func StoreSeq(index *bleve.Index, rev string) {
+	(*index).SetInternal([]byte("seq"), []byte(rev))
+
+	// Testing that it was correctly stored in the KVStore
+	res, _ := (*index).GetInternal([]byte("seq"))
+	fmt.Println("GetInternal seq:", string(res))
 }
