@@ -306,7 +306,7 @@ func FillIndex(index bleve.Index, docType string, lang string) {
 		}
 		if pred == lang {
 			count += 1
-			docs[i].M["DocType"] = docType
+			docs[i].M["docType"] = docType
 			batch.Index(docs[i].ID(), docs[i].M)
 			if i%300 == 0 {
 				index.Batch(batch)
@@ -335,10 +335,12 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 
 	query := bleve.NewQueryStringQuery(PreparingQuery(queryString))
 	searchRequest := bleve.NewSearchRequest(query)
+	searchRequest.Fields = []string{"*"}
+	searchRequest.Highlight = bleve.NewHighlight()
 
 	// Addings Facets
 	// docTypes facet
-	searchRequest.AddFacet("docTypes", bleve.NewFacetRequest("DocType", 3))
+	searchRequest.AddFacet("docTypes", bleve.NewFacetRequest("docType", 3))
 	// created facet
 	var cutOffDate = time.Now().Add(-7 * 24 * time.Hour)
 	createdFacet := bleve.NewFacetRequest("created_at", 2)
@@ -349,7 +351,7 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
 		fmt.Printf("Error on querying: %s", err)
-		return fetched, err
+		return nil, err
 	}
 	fmt.Printf(searchResults.String())
 
