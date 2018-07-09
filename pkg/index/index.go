@@ -332,11 +332,13 @@ func QueryIndex(queryString string) ([]couchdb.JSONDoc, error) {
 
 	start := time.Now()
 	var fetched []couchdb.JSONDoc
+	numb_results := 15
 
 	query := bleve.NewQueryStringQuery(PreparingQuery(queryString))
 	searchRequest := bleve.NewSearchRequest(query)
 	searchRequest.Fields = []string{"*"}
 	searchRequest.Highlight = bleve.NewHighlight()
+	searchRequest.Size = numb_results
 
 	// Addings Facets
 	// docTypes facet
@@ -379,9 +381,13 @@ func PreparingQuery(queryString string) string {
 
 func QueryPrefixIndex(queryString string) ([]couchdb.JSONDoc, error) {
 	var fetched []couchdb.JSONDoc
+	numb_results := 15
 
 	query := bleve.NewMatchPhrasePrefixQuery(queryString)
 	searchRequest := bleve.NewSearchRequest(query)
+	searchRequest.Fields = []string{"*"}
+	searchRequest.Highlight = bleve.NewHighlight()
+	searchRequest.Size = numb_results
 
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
