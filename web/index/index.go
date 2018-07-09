@@ -35,14 +35,16 @@ func SearchQuery(c echo.Context) error {
 	// 	return err
 	// }
 
-	results, _ := index.QueryIndex(fmt.Sprint(findRequest["searchQuery"]))
+	results, total, _ := index.QueryIndex(fmt.Sprint(findRequest["searchQuery"]))
 
-	for _, result := range results {
-		fmt.Println(result.M["name"])
+	out := make([]jsonapi.Object, len(results))
+	for i, result := range results {
+		fmt.Println(result.Name)
+		out[i] = &results[i]
 	}
 
 	// TODO : return the right needed infos
-	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+	return jsonapi.DataListWithTotal(c, http.StatusOK, total, out, nil)
 
 }
 
@@ -61,14 +63,16 @@ func SearchQueryPrefix(c echo.Context) error {
 	// 	return err
 	// }
 
-	results, _ := index.QueryPrefixIndex(fmt.Sprint(findRequest["searchQuery"]))
+	results, total, _ := index.QueryPrefixIndex(fmt.Sprint(findRequest["searchQuery"]))
 
-	for _, result := range results {
-		fmt.Println(result.M["name"])
+	out := make([]jsonapi.Object, len(results))
+	for i, result := range results {
+		fmt.Println(result.Name)
+		out[i] = &results[i]
 	}
 
 	// TODO : return the right needed infos
-	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+	return jsonapi.DataListWithTotal(c, http.StatusOK, total, out, nil)
 
 }
 

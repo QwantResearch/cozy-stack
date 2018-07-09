@@ -132,7 +132,7 @@ security features. Please do not use this binary as your production server.
 	db, _ := instance.Get(db_name)
 
 	index.StartIndex(db)
-	results, _ := index.QueryIndex("*qwant*") // ~ stands for fuzziness level, better use wildcard ?
+	results, _, _ := index.QueryIndex("*qwant*") // ~ stands for fuzziness level, better use wildcard ?
 	fmt.Println(results)
 
 	return
