@@ -17,6 +17,7 @@ import (
 
 	// import workers
 	_ "github.com/cozy/cozy-stack/pkg/workers/exec"
+	_ "github.com/cozy/cozy-stack/pkg/workers/indexupdate"
 	_ "github.com/cozy/cozy-stack/pkg/workers/log"
 	_ "github.com/cozy/cozy-stack/pkg/workers/mails"
 	_ "github.com/cozy/cozy-stack/pkg/workers/migrations"

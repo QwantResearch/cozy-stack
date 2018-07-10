@@ -327,6 +327,13 @@ func GetFileDocs(docType string, docs interface{}) {
 	}
 }
 
+func IndexUpdate() error {
+
+	fmt.Println("TODO: update index with last couchdb seq")
+
+	return nil
+}
+
 func ReIndex() error {
 
 	os.RemoveAll(prefixPath)
