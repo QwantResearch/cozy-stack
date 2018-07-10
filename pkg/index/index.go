@@ -3,6 +3,7 @@ package index
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -10,8 +11,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
-	"github.com/cozy/cozy-stack/pkg/realtime"
-	"github.com/cozy/cozy-stack/pkg/vfs"
 )
 
 type file struct {
@@ -102,6 +101,8 @@ func StartIndex(instance *instance.Instance) error {
 		}
 	}
 
+	IndexUpdate()
+
 	// Creating an aliasIndex to make it clear to the user:
 
 	indexAlias = bleve.NewIndexAlias()
@@ -115,113 +116,20 @@ func StartIndex(instance *instance.Instance) error {
 		indexAlias.Add(*i)
 	}
 
-	// subscribing to changes
-	eventChan := realtime.GetHub().Subscriber(inst)
-	for _, value := range mapIndexType {
-		eventChan.Subscribe(value)
-	}
-
 	ReplicateAll()
-
-	// TODO: call StoreSeq qui right sequence number for each index + update it
-	StoreSeq(photoAlbumIndex["fr"], "123456789")
-
-	go func() {
-		for ev := range eventChan.Channel {
-
-			var originalIndex *bleve.Index
-			originalIndex = nil
-			if ev.Verb == "CREATED" {
-
-				// TODO : Change casting to the right one
-				// + solve the problem of finding which content to predict the language on
-				doc := ev.Doc.(*vfs.FileDoc)
-
-				// TODO : detect language on the fields depending on the doctype, and not just "name"
-				lang, err := ft_language.GetLanguage(doc.Name())
-				if err != nil {
-					fmt.Printf("Error on language prediction:  %s\n", err)
-				}
-
-				if ev.Doc.DocType() == "io.cozy.photos.albums" {
-					originalIndex = photoAlbumIndex[lang]
-				}
-				if ev.Doc.DocType() == "io.cozy.files" {
-					originalIndex = fileIndex[lang]
-				}
-				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
-					originalIndex = bankAccountIndex[lang]
-				}
-
-				if originalIndex == nil {
-					fmt.Println("DocType not supported")
-					return
-				}
-
-				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
-				fmt.Println(ev.Doc)
-				fmt.Println("indexed")
-
-			} else if ev.Verb == "UPDATED" {
-
-				// To make it easier, we assume that language doesn't change and we find original index
-				if ev.Doc.DocType() == "io.cozy.photos.albums" {
-					originalIndex = FindIndexDoc(photoAlbumIndex, ev.Doc.ID())
-				}
-				if ev.Doc.DocType() == "io.cozy.files" {
-					originalIndex = FindIndexDoc(fileIndex, ev.Doc.ID())
-				}
-				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
-					originalIndex = FindIndexDoc(bankAccountIndex, ev.Doc.ID())
-				}
-
-				if originalIndex == nil {
-					fmt.Println("DocType not supported")
-					return
-				}
-
-				(*originalIndex).Index(ev.Doc.ID(), ev.Doc)
-				fmt.Println(ev.Doc)
-				fmt.Println("reindexed")
-
-			} else if ev.Verb == "DELETED" {
-
-				if ev.Doc.DocType() == "io.cozy.photos.albums" {
-					originalIndex = FindIndexDoc(photoAlbumIndex, ev.Doc.ID())
-				}
-				if ev.Doc.DocType() == "io.cozy.files" {
-					originalIndex = FindIndexDoc(fileIndex, ev.Doc.ID())
-				}
-				if ev.Doc.DocType() == "io.cozy.bank.accounts" {
-					originalIndex = FindIndexDoc(bankAccountIndex, ev.Doc.ID())
-				}
-
-				if originalIndex == nil {
-					fmt.Println("DocType not supported")
-					return
-				}
-
-				err := (*originalIndex).Delete(ev.Doc.ID())
-				fmt.Println(err)
-				fmt.Println("deleted")
-
-			} else {
-				fmt.Println(ev.Verb)
-			}
-		}
-	}()
 
 	return nil
 }
 
-func FindIndexDoc(indexList map[string]*bleve.Index, id string) *bleve.Index {
-	for _, i := range indexList {
-		doc, _ := (*i).Document(id)
+func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string {
+	for _, lang := range languages {
+		doc, _ := (*indexList[lang]).Document(id)
 		if doc != nil {
-			return i
+			return lang
 		}
+
 	}
-	return nil
+	return ""
 }
 
 func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
@@ -241,7 +149,8 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 			return &i, err2
 		}
 
-		FillIndex(i, mapIndexType[indexPath], lang)
+		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on IndexUpdate())
+		SetStoreSeq(&i, "0")
 
 		return &i, nil
 
@@ -254,82 +163,88 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 	return &i, nil
 }
 
-func FillIndex(index bleve.Index, docType string, lang string) {
-
-	// Which solution to use ?
-	// Either a common struct (such as JSONDoc) or a struct by type of document ?
-
-	// 	// Specified struct
-
-	// var docsFile []file
-	// var docsPhotoAlbum []photoAlbum
-	// if docType == "io.cozy.photos.albums" {
-	// 	GetFileDocs(docType, &docsPhotoAlbum)
-	// 	for i := range docsPhotoAlbum {
-	// 		docsPhotoAlbum[i].DocType = docType
-	// 		index.Index(docsPhotoAlbum[i].ID, docsPhotoAlbum[i])
-	// 	}
-	// } else {
-	// 	GetFileDocs(docType, &docsFile)
-	// 	for i := range docsFile {
-	// 		docsFile[i].DocType = docType
-	// 		index.Index(docsFile[i].ID, docsFile[i])
-	// 	}
-	// }
-
-	// 	// Common struct
-
-	// // Indexation Time
-	// start := time.Now()
-	// var docs []couchdb.JSONDoc
-	// GetFileDocs(docType, &docs)
-	// for i := range docs {
-	// 	docs[i].M["DocType"] = docType
-	// 	index.Index(docs[i].ID(), docs[i].M)
-	// }
-	// end := time.Since(start)
-	// fmt.Println(docType, " indexing time: ", end, " for ", len(docs), " documents")
-
-	// Indexation Batch Time
-	start := time.Now()
-	count := 0
-	var docs []couchdb.JSONDoc
-	batch := index.NewBatch()
-	GetFileDocs(docType, &docs)
-	for i := range docs {
-
-		// TODO : detect language on the fields depending on the doctype, and not just "name"
-		pred, err := ft_language.GetLanguage(docs[i].M["name"].(string))
-		if err != nil {
-			fmt.Printf("Error on language prediction:  %s\n", err)
-		}
-		if pred == lang {
-			count += 1
-			docs[i].M["docType"] = docType
-			batch.Index(docs[i].ID(), docs[i].M)
-			if i%300 == 0 {
-				index.Batch(batch)
-				batch = index.NewBatch()
-			}
-		}
-	}
-	index.Batch(batch)
-	end := time.Since(start)
-	fmt.Println(docType, "indexing time:", end, "for", count, "documents", lang)
-
-}
-
-func GetFileDocs(docType string, docs interface{}) {
-	req := &couchdb.AllDocsRequest{}
-	err := couchdb.GetAllDocs(inst, docType, req, docs)
-	if err != nil {
-		fmt.Printf("Error on unmarshall: %s\n", err)
-	}
-}
-
 func IndexUpdate() error {
 
-	fmt.Println("TODO: update index with last couchdb seq")
+	count := 0
+	for _, indexList := range []map[string]*bleve.Index{photoAlbumIndex, fileIndex, bankAccountIndex} {
+
+		// Set request to get last changes
+		name_index := strings.Split((*indexList["en"]).Name(), "/")
+		docType := mapIndexType[name_index[len(name_index)-1]]
+		last_store_seq, err := GetStoreSeq(indexList["en"])
+		if err != nil {
+			fmt.Printf("Error on GetStoredSeq: %s\n", err)
+		}
+
+		var request = &couchdb.ChangesRequest{
+			DocType:     docType,
+			Since:       last_store_seq, // Set with last seq
+			IncludeDocs: true,
+		}
+
+		// Fetch last changes
+		// TODO : check that we index last version when there are multiple changes for a doc since last seq
+		response, err := couchdb.GetChanges(inst, request)
+		if err != nil {
+			fmt.Printf("Error on getChanges: %s\n", err)
+			// return err
+			continue
+		}
+
+		// Index thoses last changes
+		batch := make(map[string]*bleve.Batch, len(languages))
+		for _, lang := range languages {
+			batch[lang] = (*indexList[lang]).NewBatch()
+		}
+
+		for i, result := range response.Results {
+
+			// TODO : deal with files with trashed = true (remove them from index or not)
+
+			if _, ok := result.Doc.M["name"]; !ok {
+				// TODO : find out out why some changes don't correspond to files only and thus don't have "name" field
+				fmt.Printf("Error on fetching name\n")
+				continue
+			}
+
+			originalLang := FindWhichLangIndexDoc(indexList, result.DocID)
+			if originalLang != "" {
+				// We found the document so we should update it the original index
+				result.Doc.M["docType"] = docType
+				batch[originalLang].Index(result.DocID, result.Doc.M)
+				count += 1
+			} else {
+				// We couldn't find the document, so we predict the language to index it in the right index
+				pred, err := ft_language.GetLanguage(result.Doc.M["name"].(string)) // TODO: predict on content and not "name" field in particular
+				if err != nil {
+					fmt.Printf("Error on language prediction:  %s\n", err)
+					continue
+				}
+				result.Doc.M["docType"] = docType
+				batch[pred].Index(result.DocID, result.Doc.M)
+				count += 1
+			}
+
+			// Batch files
+			if i%300 == 0 {
+				for _, lang := range languages {
+					(*indexList[lang]).Batch(batch[lang])
+					batch[lang] = (*indexList[lang]).NewBatch()
+				}
+			}
+
+		}
+
+		for _, lang := range languages {
+			(*indexList[lang]).Batch(batch[lang])
+
+			// Store the new seq number in the indexes
+			SetStoreSeq(indexList[lang], response.LastSeq)
+		}
+
+		fmt.Println("Updated", count, "documents")
+
+	}
 
 	return nil
 }
@@ -430,10 +345,11 @@ func Replicate(index *bleve.Index, path string) error {
 	return nil
 }
 
-func StoreSeq(index *bleve.Index, rev string) {
+func SetStoreSeq(index *bleve.Index, rev string) {
 	(*index).SetInternal([]byte("seq"), []byte(rev))
+}
 
-	// Testing that it was correctly stored in the KVStore
-	res, _ := (*index).GetInternal([]byte("seq"))
-	fmt.Println("GetInternal seq:", string(res))
+func GetStoreSeq(index *bleve.Index) (string, error) {
+	res, err := (*index).GetInternal([]byte("seq"))
+	return string(res), err
 }
