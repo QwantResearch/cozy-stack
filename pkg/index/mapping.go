@@ -29,7 +29,7 @@ func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang
 		indexMapping = AddBankAccountMapping(indexMapping, lang)
 		break
 	}
-	indexMapping.TypeField = "DocType"
+	indexMapping.TypeField = "docType"
 }
 
 func AddPhotoAlbumMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
@@ -63,12 +63,17 @@ func AddFileMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mappin
 	fileMapping.AddFieldMappingsAt("updated_at", dateMapping)
 	// TODO: check tag mapping (knowing it's an array)
 
+	// store field only
+	storeFieldMapping := bleve.NewTextFieldMapping()
+	storeFieldMapping.Index = false
+	storeFieldMapping.Store = true
+	fileMapping.AddFieldMappingsAt("_rev", storeFieldMapping)
+
 	// Ignore fields mapping
 	ignoreMapping := bleve.NewDocumentDisabledMapping()
 	fileMapping.AddSubDocumentMapping("metadata", ignoreMapping)
 	fileMapping.AddSubDocumentMapping("referenced_by", ignoreMapping)
 	fileMapping.AddSubDocumentMapping("_id", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("_rev", ignoreMapping)
 	fileMapping.AddSubDocumentMapping("class", ignoreMapping)
 	fileMapping.AddSubDocumentMapping("executable", ignoreMapping)
 	fileMapping.AddSubDocumentMapping("mime", ignoreMapping)
