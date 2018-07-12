@@ -3,7 +3,6 @@ package index
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -45,15 +44,17 @@ type photoAlbum struct {
 	DocType   string    `json:"docType"`
 }
 
-// var typeMap map[string]interface{}
+// documentIndexes structure that encapsulates, the doctype, the index path and the different language indexes corresponding to this doctype
+type documentIndexes struct {
+	docType   string
+	indexPath string
+	indexList map[string]*bleve.Index // The mapping between the languages and the corresponding indexes
+}
 
-var mapIndexType map[string]string
+var indexes []documentIndexes
+
 var indexAlias bleve.IndexAlias
 var inst *instance.Instance
-
-var photoAlbumIndex map[string]*bleve.Index
-var fileIndex map[string]*bleve.Index
-var bankAccountIndex map[string]*bleve.Index
 
 var languages []string
 
@@ -65,10 +66,31 @@ func StartIndex(instance *instance.Instance) error {
 
 	inst = instance
 
-	mapIndexType = map[string]string{
-		"photo.albums.bleve":  consts.PhotosAlbums,
-		"file.bleve":          consts.Files,
-		"bank.accounts.bleve": "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
+	indexes = []documentIndexes{
+		documentIndexes{
+			consts.PhotosAlbums,
+			"photo.albums.bleve",
+			map[string]*bleve.Index{
+				"fr": nil,
+				"en": nil,
+			},
+		},
+		documentIndexes{
+			consts.Files,
+			"file.bleve",
+			map[string]*bleve.Index{
+				"fr": nil,
+				"en": nil,
+			},
+		},
+		documentIndexes{
+			"io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
+			"bank.accounts.bleve",
+			map[string]*bleve.Index{
+				"fr": nil,
+				"en": nil,
+			},
+		},
 	}
 
 	ft_language = NewFastTextInst()
@@ -78,42 +100,27 @@ func StartIndex(instance *instance.Instance) error {
 
 	languages = GetAvailableLanguages()
 
-	photoAlbumIndex = make(map[string]*bleve.Index, len(languages))
-	fileIndex = make(map[string]*bleve.Index, len(languages))
-	bankAccountIndex = make(map[string]*bleve.Index, len(languages))
-
 	prefixPath = "bleve/"
 
 	for _, lang := range languages {
-		photoAlbumIndex[lang], err = GetIndex("photo.albums.bleve", lang)
-		if err != nil {
-			return err
-		}
-
-		fileIndex[lang], err = GetIndex("file.bleve", lang)
-		if err != nil {
-			return err
-		}
-
-		bankAccountIndex[lang], err = GetIndex("bank.accounts.bleve", lang)
-		if err != nil {
-			return err
+		for _, docIndexes := range indexes {
+			docIndexes.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	IndexUpdate()
+	AllIndexesUpdate()
 
 	// Creating an aliasIndex to make it clear to the user:
 
 	indexAlias = bleve.NewIndexAlias()
-	for _, i := range photoAlbumIndex {
-		indexAlias.Add(*i)
-	}
-	for _, i := range fileIndex {
-		indexAlias.Add(*i)
-	}
-	for _, i := range bankAccountIndex {
-		indexAlias.Add(*i)
+
+	for _, lang := range languages {
+		for _, docIndexes := range indexes {
+			indexAlias.Add(*docIndexes.indexList[lang])
+		}
 	}
 
 	ReplicateAll()
@@ -132,9 +139,9 @@ func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string 
 	return ""
 }
 
-func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
+func GetIndex(indexPath string, lang string, docType string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
-	AddTypeMapping(indexMapping, mapIndexType[indexPath], lang)
+	AddTypeMapping(indexMapping, docType, lang)
 
 	fullIndexPath := prefixPath + lang + "/" + indexPath
 
@@ -163,128 +170,120 @@ func GetIndex(indexPath string, lang string) (*bleve.Index, error) {
 	return &i, nil
 }
 
-func IndexUpdate() error {
-
-	count := 0
-	for _, indexList := range []map[string]*bleve.Index{photoAlbumIndex, fileIndex, bankAccountIndex} {
-
-		// Set request to get last changes
-		name_index := strings.Split((*indexList["en"]).Name(), "/")
-		docType := mapIndexType[name_index[len(name_index)-1]]
-		last_store_seq, err := GetStoreSeq(indexList["en"])
+func AllIndexesUpdate() error {
+	for _, docIndexes := range indexes {
+		err := IndexUpdate(docIndexes)
 		if err != nil {
-			fmt.Printf("Error on GetStoredSeq: %s\n", err)
+			continue
+			// return err // TODO : change behaviour so that we don't ignore this error
 		}
+		fmt.Println(docIndexes.indexPath, "updated")
+	}
+	return nil
+}
 
-		var request = &couchdb.ChangesRequest{
-			DocType:     docType,
-			Since:       last_store_seq, // Set with last seq
-			IncludeDocs: true,
-		}
+func IndexUpdate(docIndexes documentIndexes) error {
 
-		// Fetch last changes
-		// TODO : check that we index last version when there are multiple changes for a doc since last seq
-		response, err := couchdb.GetChanges(inst, request)
-		if err != nil {
-			fmt.Printf("Error on getChanges: %s\n", err)
-			// return err
+	// Set request to get last changes
+	last_store_seq, err := GetStoreSeq(docIndexes.indexList["en"])
+	if err != nil {
+		fmt.Printf("Error on GetStoredSeq: %s\n", err)
+	}
+
+	var request = &couchdb.ChangesRequest{
+		DocType:     docIndexes.docType,
+		Since:       last_store_seq, // Set with last seq
+		IncludeDocs: true,
+	}
+
+	// Fetch last changes
+	// TODO : check how getchanges behave when there are multiple changes for a doc since last seq
+	response, err := couchdb.GetChanges(inst, request)
+	if err != nil {
+		fmt.Printf("Error on getChanges: %s\n", err)
+		return err
+	}
+
+	// Index thoses last changes
+	batch := make(map[string]*bleve.Batch, len(languages))
+	for _, lang := range languages {
+		batch[lang] = (*docIndexes.indexList[lang]).NewBatch()
+	}
+
+	for i, result := range response.Results {
+
+		// TODO : deal with files with trashed = true (remove them from index or not)
+
+		if _, ok := result.Doc.M["name"]; !ok {
+			// TODO : find out out why some changes don't correspond to files only and thus don't have "name" field
+			fmt.Printf("Error on fetching name\n")
 			continue
 		}
 
-		// Index thoses last changes
-		batch := make(map[string]*bleve.Batch, len(languages))
-		for _, lang := range languages {
-			batch[lang] = (*indexList[lang]).NewBatch()
-		}
-
-		for i, result := range response.Results {
-
-			// TODO : deal with files with trashed = true (remove them from index or not)
-
-			if _, ok := result.Doc.M["name"]; !ok {
-				// TODO : find out out why some changes don't correspond to files only and thus don't have "name" field
-				fmt.Printf("Error on fetching name\n")
+		originalLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
+		if originalLang != "" {
+			// We found the document so we should update it the original index
+			result.Doc.M["docType"] = docIndexes.docType
+			batch[originalLang].Index(result.DocID, result.Doc.M)
+		} else {
+			// We couldn't find the document, so we predict the language to index it in the right index
+			pred, err := ft_language.GetLanguage(result.Doc.M["name"].(string)) // TODO: predict on content and not "name" field in particular
+			if err != nil {
+				fmt.Printf("Error on language prediction:  %s\n", err)
 				continue
 			}
-
-			originalLang := FindWhichLangIndexDoc(indexList, result.DocID)
-			if originalLang != "" {
-				// We found the document so we should update it the original index
-				result.Doc.M["docType"] = docType
-				batch[originalLang].Index(result.DocID, result.Doc.M)
-				count += 1
-			} else {
-				// We couldn't find the document, so we predict the language to index it in the right index
-				pred, err := ft_language.GetLanguage(result.Doc.M["name"].(string)) // TODO: predict on content and not "name" field in particular
-				if err != nil {
-					fmt.Printf("Error on language prediction:  %s\n", err)
-					continue
-				}
-				result.Doc.M["docType"] = docType
-				batch[pred].Index(result.DocID, result.Doc.M)
-				count += 1
-			}
-
-			// Batch files
-			if i%300 == 0 {
-				for _, lang := range languages {
-					(*indexList[lang]).Batch(batch[lang])
-					batch[lang] = (*indexList[lang]).NewBatch()
-				}
-			}
-
+			result.Doc.M["docType"] = docIndexes.docType
+			batch[pred].Index(result.DocID, result.Doc.M)
 		}
 
-		for _, lang := range languages {
-			(*indexList[lang]).Batch(batch[lang])
-
-			// Store the new seq number in the indexes
-			SetStoreSeq(indexList[lang], response.LastSeq)
+		// Batch files
+		if i%300 == 0 {
+			for _, lang := range languages {
+				(*docIndexes.indexList[lang]).Batch(batch[lang])
+				batch[lang] = (*docIndexes.indexList[lang]).NewBatch()
+			}
 		}
 
-		fmt.Println("Updated", count, "documents")
+	}
 
+	for _, lang := range languages {
+		(*docIndexes.indexList[lang]).Batch(batch[lang])
+
+		// Store the new seq number in the indexes
+		SetStoreSeq(docIndexes.indexList[lang], response.LastSeq)
 	}
 
 	return nil
 }
 
 func ReIndex() error {
-
+	var count int
 	os.RemoveAll(prefixPath)
 
-	for _, lang := range languages {
+	AllIndexesUpdate()
 
-		// Creating new indexes
-		newPhotoAlbumIndex, err := GetIndex("photo.albums.bleve", lang)
-		if err != nil {
-			return err
+	for _, docIndexes := range indexes {
+		newDocIndex := documentIndexes{
+			docType:   docIndexes.docType,
+			indexPath: docIndexes.indexPath,
+			indexList: make(map[string]*bleve.Index),
+		}
+		for _, lang := range languages {
+			var err error
+			newDocIndex.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
+			if err != nil {
+				fmt.Printf("Error on GetIndex:  %s\n", err)
+				return err
+			}
 		}
 
-		newFileIndex, err := GetIndex("file.bleve", lang)
-		if err != nil {
-			return err
+		IndexUpdate(newDocIndex)
+
+		for _, lang := range languages {
+			indexAlias.Swap([]bleve.Index{*newDocIndex.indexList[lang]}, []bleve.Index{*docIndexes.indexList[lang]})
+			(*docIndexes.indexList[lang]).Close()
+			docIndexes.indexList[lang] = newDocIndex.indexList[lang]
 		}
-
-		newBankAccountIndex, err := GetIndex("bank.accounts.bleve", lang)
-		if err != nil {
-			return err
-		}
-
-		// Swapping
-		indexAlias.Swap(
-			[]bleve.Index{(*newPhotoAlbumIndex), (*newFileIndex), (*newBankAccountIndex)},
-			[]bleve.Index{*(photoAlbumIndex[lang]), *(fileIndex[lang]), *(bankAccountIndex[lang])})
-
-		// Closing old indexes
-		(*photoAlbumIndex[lang]).Close()
-		(*fileIndex[lang]).Close()
-		(*bankAccountIndex[lang]).Close()
-
-		// Setting global var
-		photoAlbumIndex[lang] = newPhotoAlbumIndex
-		fileIndex[lang] = newFileIndex
-		bankAccountIndex[lang] = newBankAccountIndex
 
 	}
 
@@ -298,10 +297,10 @@ func ReplicateAll() error {
 	count = 0
 
 	for _, lang := range languages {
-		for _, index := range []map[string]*bleve.Index{fileIndex, photoAlbumIndex, bankAccountIndex} {
-			tmp, _ := (*index[lang]).DocCount()
+		for _, docIndexes := range indexes {
+			tmp, _ := (*docIndexes.indexList[lang]).DocCount()
 			count += tmp
-			err := Replicate(index[lang], (*index[lang]).Name()+"/store.save")
+			err := Replicate(docIndexes.indexList[lang], (*docIndexes.indexList[lang]).Name()+"/store.save")
 			if err != nil {
 				return err
 			}

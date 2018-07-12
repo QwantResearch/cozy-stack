@@ -26,6 +26,6 @@ func init() {
 func Worker(ctx *jobs.WorkerContext) error {
 
 	fmt.Println("indexupdate worker working")
-	return index.IndexUpdate()
+	return index.AllIndexesUpdate()
 
 }
