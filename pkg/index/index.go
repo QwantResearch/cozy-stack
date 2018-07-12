@@ -257,7 +257,7 @@ func IndexUpdate(docIndexes documentIndexes) error {
 }
 
 func ReIndex() error {
-	var count int
+
 	os.RemoveAll(prefixPath)
 
 	AllIndexesUpdate()
