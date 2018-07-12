@@ -10,10 +10,18 @@ import (
 	"github.com/cozy/cozy-stack/web/jsonapi"
 )
 
+type QueryRequest struct {
+	QueryString string
+	NumbResults int
+	Highlight   bool
+	Name        bool
+	Rev         bool
+}
+
 type SearchResult struct {
 	id        string `json:"_id"`
-	rev       string `json:"_rev"`
 	docType   string `json:"docType"`
+	rev       string `json:"_rev"`
 	Name      string `json:"name"`
 	Highlight string `json:"highlight"`
 }
@@ -29,26 +37,11 @@ func (r *SearchResult) Included() []jsonapi.Object             { return []jsonap
 func (r *SearchResult) MarshalJSON() ([]byte, error)           { return json.Marshal(*r) }
 func (r *SearchResult) Links() *jsonapi.LinksList              { return nil }
 
-func QueryIndex(queryString string) ([]SearchResult, int, error) {
+func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	start := time.Now()
-	numb_results := 15
 
-	query := bleve.NewQueryStringQuery(PreparingQuery(queryString))
-	searchRequest := bleve.NewSearchRequest(query)
-	searchRequest.Fields = []string{"*"}
-	searchRequest.Highlight = bleve.NewHighlight()
-	searchRequest.Size = numb_results
-
-	// Addings Facets
-	// docTypes facet
-	searchRequest.AddFacet("docTypes", bleve.NewFacetRequest("docType", 3))
-	// created facet
-	var cutOffDate = time.Now().Add(-7 * 24 * time.Hour)
-	createdFacet := bleve.NewFacetRequest("created_at", 2)
-	createdFacet.AddDateTimeRange("old", time.Unix(0, 0), cutOffDate)
-	createdFacet.AddDateTimeRange("new", cutOffDate, time.Unix(9999999999, 9999999999)) //check how many 9 needed
-	searchRequest.AddFacet("created", createdFacet)
+	searchRequest := BuildQuery(request, false)
 
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
@@ -61,12 +54,7 @@ func QueryIndex(queryString string) ([]SearchResult, int, error) {
 		fmt.Printf("\t%s(%d)\n", dateRange.Name, dateRange.Count)
 	}
 
-	fetched := make([]SearchResult, len(searchResults.Hits))
-	for i, result := range searchResults.Hits {
-		// TODO : check that the hits are not the 10 first
-		currFetched := SearchResult{result.ID, (result.Fields["_rev"]).(string), (result.Fields["docType"]).(string), (result.Fields["name"]).(string), result.Fragments["name"][0]}
-		fetched[i] = currFetched
-	}
+	fetched := BuildResults(request, searchResults)
 
 	end := time.Since(start)
 	fmt.Println("query time:", end)
@@ -78,15 +66,9 @@ func PreparingQuery(queryString string) string {
 	return "*" + queryString + "*"
 }
 
-func QueryPrefixIndex(queryString string) ([]SearchResult, int, error) {
+func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
-	numb_results := 15
-
-	query := bleve.NewMatchPhrasePrefixQuery(queryString)
-	searchRequest := bleve.NewSearchRequest(query)
-	searchRequest.Fields = []string{"*"}
-	searchRequest.Highlight = bleve.NewHighlight()
-	searchRequest.Size = numb_results
+	searchRequest := BuildQuery(request, true)
 
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
@@ -95,12 +77,66 @@ func QueryPrefixIndex(queryString string) ([]SearchResult, int, error) {
 	}
 	fmt.Printf(searchResults.String())
 
+	fetched := BuildResults(request, searchResults)
+
+	return fetched, int(searchResults.Total), nil
+}
+
+func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
+
+	var searchRequest *bleve.SearchRequest
+	if prefix {
+		query := bleve.NewMatchPhrasePrefixQuery(request.QueryString)
+		searchRequest = bleve.NewSearchRequest(query)
+	} else {
+		query := bleve.NewQueryStringQuery(PreparingQuery(request.QueryString))
+		searchRequest = bleve.NewSearchRequest(query)
+	}
+
+	if request.Highlight {
+		searchRequest.Fields = []string{"*"} // instead of being all fields, it should be all indexed fields.
+		searchRequest.Highlight = bleve.NewHighlight()
+	} else {
+		searchRequest.Fields = []string{"docType"}
+		if request.Name {
+			searchRequest.Fields = append(searchRequest.Fields, "name")
+		}
+		if request.Rev {
+			searchRequest.Fields = append(searchRequest.Fields, "_rev")
+		}
+	}
+	searchRequest.Size = request.NumbResults
+
+	// Addings Facets
+	// docTypes facet
+	searchRequest.AddFacet("docTypes", bleve.NewFacetRequest("docType", 3))
+	// created facet
+	var cutOffDate = time.Now().Add(-7 * 24 * time.Hour)
+	createdFacet := bleve.NewFacetRequest("created_at", 2)
+	createdFacet.AddDateTimeRange("old", time.Unix(0, 0), cutOffDate)
+	createdFacet.AddDateTimeRange("new", cutOffDate, time.Unix(9999999999, 9999999999)) //check how many 9 needed
+	searchRequest.AddFacet("created", createdFacet)
+
+	return searchRequest
+}
+
+func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []SearchResult {
 	fetched := make([]SearchResult, len(searchResults.Hits))
 	for i, result := range searchResults.Hits {
-		// TODO : check that the hits are not the 10 first
-		currFetched := SearchResult{result.ID, (result.Fields["_rev"]).(string), (result.Fields["docType"]).(string), (result.Fields["name"]).(string), result.Fragments["name"][0]}
+		currFetched := SearchResult{result.ID, (result.Fields["docType"]).(string), "", "", ""}
+
+		if request.Highlight {
+			currFetched.Highlight = result.Fragments["name"][0]
+		}
+		if request.Name {
+			currFetched.Name = result.Fields["name"].(string)
+		}
+		if request.Rev {
+			currFetched.SetRev(result.Fields["_rev"].(string))
+		}
+		// currFetched := SearchResult{result.ID, (result.Fields["_rev"]).(string), (result.Fields["docType"]).(string), (result.Fields["name"]).(string), result.Fragments["name"][0]}
 		fetched[i] = currFetched
 	}
 
-	return fetched, int(searchResults.Total), nil
+	return fetched
 }

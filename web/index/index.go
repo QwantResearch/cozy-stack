@@ -35,7 +35,9 @@ func SearchQuery(c echo.Context) error {
 	// 	return err
 	// }
 
-	results, total, _ := index.QueryIndex(fmt.Sprint(findRequest["searchQuery"]))
+	request := MakeRequest(findRequest)
+
+	results, total, _ := index.QueryIndex(request)
 
 	out := make([]jsonapi.Object, len(results))
 	for i, result := range results {
@@ -63,7 +65,9 @@ func SearchQueryPrefix(c echo.Context) error {
 	// 	return err
 	// }
 
-	results, total, _ := index.QueryPrefixIndex(fmt.Sprint(findRequest["searchQuery"]))
+	request := MakeRequest(findRequest)
+
+	results, total, _ := index.QueryPrefixIndex(request)
 
 	out := make([]jsonapi.Object, len(results))
 	for i, result := range results {
@@ -91,4 +95,33 @@ func Reindex(c echo.Context) error {
 
 	return jsonapi.DataList(c, http.StatusOK, nil, nil)
 
+}
+
+func MakeRequest(mapJSONRequest map[string]interface{}) index.QueryRequest {
+	request := index.QueryRequest{
+		QueryString: mapJSONRequest["searchQuery"].(string),
+		// default values
+		NumbResults: 15,
+		Highlight:   true,
+		Name:        true,
+		Rev:         true,
+	}
+
+	if numbResults, ok := mapJSONRequest["numbResults"]; ok {
+		request.NumbResults = int(numbResults.(float64))
+	}
+
+	if highlight, ok := mapJSONRequest["highlight"]; ok {
+		request.Highlight = highlight.(bool)
+	}
+
+	if name, ok := mapJSONRequest["name"]; ok {
+		request.Name = name.(bool)
+	}
+
+	if rev, ok := mapJSONRequest["_rev"]; ok {
+		request.Rev = rev.(bool)
+	}
+
+	return request
 }
