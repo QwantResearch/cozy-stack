@@ -19,7 +19,7 @@ func (f *FastText) GetLanguage(sentence string) (string, error) {
 	if f.ft == nil {
 		return "", errors.New("Predict called on closed FastText")
 	}
-	preds, err := f.PredictK(sentence, 164)
+	preds, err := f.PredictK(sentence, 176)
 	if err != nil {
 		fmt.Println(err)
 		return "", err
