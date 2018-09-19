@@ -27,7 +27,7 @@ func SearchQuery(c echo.Context) error {
 	var findRequest map[string]interface{}
 
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
-		return jsonapi.NewError(http.StatusBadRequest, err)
+		return jsonapi.NewError(http.StatusBadRequest, "Could not decode the request")
 	}
 
 	// TODO : see how to deal with permissions
@@ -57,7 +57,7 @@ func SearchQueryPrefix(c echo.Context) error {
 	var findRequest map[string]interface{}
 
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
-		return jsonapi.NewError(http.StatusBadRequest, err)
+		return jsonapi.NewError(http.StatusBadRequest, "Could not decode the request")
 	}
 
 	// TODO : see how to deal with permissions
