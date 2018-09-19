@@ -221,6 +221,17 @@ func IndexUpdate(docIndexes documentIndexes) error {
 		}
 
 		originalLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
+
+		// Delete the file if it has been sent to trashed
+		if result.Doc.M["trashed"] == true {
+			if originalLang == "" {
+				fmt.Printf("Error on deleting, original index not found\n")
+				continue
+			}
+			(*docIndexes.indexList[originalLang]).Delete(result.DocID)
+			continue
+		}
+
 		if originalLang != "" {
 			// We found the document so we should update it the original index
 			result.Doc.M["docType"] = docIndexes.docType
