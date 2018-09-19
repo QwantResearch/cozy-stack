@@ -18,6 +18,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_search", SearchQuery)
 	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
+	router.POST("/_index_update", IndexUpdate)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -89,6 +90,17 @@ func Reindex(c echo.Context) error {
 	// }
 
 	err := index.ReIndex()
+	if err != nil {
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+
+}
+
+func IndexUpdate(c echo.Context) error {
+
+	err := index.AllIndexesUpdate()
 	if err != nil {
 		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
 	}
