@@ -7,13 +7,14 @@ Generate a new OAuth access token
 Generate a new OAuth access token
 
 ```
-cozy-stack instances token-oauth [domain] [clientid] [scopes] [flags]
+cozy-stack instances token-oauth <domain> <clientid> <scopes> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for token-oauth
+      --expire duration   Make the token expires in this amount of time
+  -h, --help              help for token-oauth
 ```
 
 ### Options inherited from parent commands

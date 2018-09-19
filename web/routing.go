@@ -32,6 +32,7 @@ import (
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/cozy/cozy-stack/web/status"
 	"github.com/cozy/cozy-stack/web/version"
+	"github.com/cozy/echo/middleware"
 
 	"github.com/cozy/echo"
 	"github.com/prometheus/client_golang/prometheus"
@@ -145,9 +146,7 @@ func SetupRoutes(router *echo.Echo) error {
 				DefaultContentTypeOffer: jsonapi.ContentType,
 			}),
 		}
-		mws := append(mwsNotBlocked, middlewares.CheckInstanceTOS)
-		apps.WebappsRoutes(router.Group("/apps", mws...))
-		apps.KonnectorRoutes(router.Group("/konnectors", mws...))
+		mws := append(mwsNotBlocked, middlewares.CheckInstanceBlocked)
 		registry.Routes(router.Group("/registry", mws...))
 		data.Routes(router.Group("/data", mws...))
 		files.Routes(router.Group("/files", mws...))
@@ -162,6 +161,8 @@ func SetupRoutes(router *echo.Echo) error {
 		index.Routes(router.Group("/index", mws...))
 
 		// The settings routes needs not to be blocked
+		apps.WebappsRoutes(router.Group("/apps", mwsNotBlocked...))
+		apps.KonnectorRoutes(router.Group("/konnectors", mwsNotBlocked...))
 		settings.Routes(router.Group("/settings", mwsNotBlocked...))
 
 		// Careful, the normal middlewares NeedInstance and LoadSession are not
@@ -203,13 +204,18 @@ func timersMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 // SetupAdminRoutes sets the routing for the administration HTTP endpoints
 func SetupAdminRoutes(router *echo.Echo) error {
 	var mws []echo.MiddlewareFunc
-	if !config.IsDevRelease() {
+	if config.IsDevRelease() {
+		mws = append(mws, middleware.LoggerWithConfig(middleware.LoggerConfig{
+			Format: "time=${time_rfc3339}\tstatus=${status}\tmethod=${method}\thost=${host}\turi=${uri}\tbytes_out=${bytes_out}\n",
+		}))
+	} else {
 		mws = append(mws, middlewares.BasicAuth(config.GetConfig().AdminSecretFileName))
 	}
 
 	instances.Routes(router.Group("/instances", mws...))
 	version.Routes(router.Group("/version", mws...))
 	metrics.Routes(router.Group("/metrics", mws...))
+	realtime.Routes(router.Group("/realtime", mws...))
 
 	setupRecover(router)
 
@@ -239,7 +245,7 @@ func CreateSubdomainProxy(router *echo.Echo, appsHandler echo.HandlerFunc) (*ech
 		// TODO(optim): minimize the number of instance requests
 		if parent, slug, _ := middlewares.SplitHost(c.Request().Host); slug != "" {
 			if i, err := instance.Get(parent); err == nil {
-				c.Set("instance", i)
+				c.Set("instance", i.WithContextualDomain(parent))
 				c.Set("slug", slug)
 				return appsHandler(c)
 			}

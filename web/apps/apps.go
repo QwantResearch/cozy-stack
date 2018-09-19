@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 
 	"github.com/cozy/cozy-stack/pkg/apps"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -48,7 +49,7 @@ func (man *apiApp) Links() *jsonapi.LinksList {
 			links.Related = app.Instance.SubDomain(app.Slug()).String()
 		}
 	case (*apps.KonnManifest):
-		route = "konnectors"
+		route = "/konnectors/"
 		if app.Icon != "" {
 			links.Icon = "/konnectors/" + app.Slug() + "/icon"
 		}
@@ -81,7 +82,7 @@ func getHandler(appType apps.AppType) echo.HandlerFunc {
 		if err != nil {
 			return wrapAppsError(err)
 		}
-		if err := permissions.Allow(c, permissions.GET, man); err != nil {
+		if err := middlewares.Allow(c, permissions.GET, man); err != nil {
 			return err
 		}
 		if webapp, ok := man.(*apps.WebappManifest); ok {
@@ -97,7 +98,7 @@ func installHandler(installerType apps.AppType) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		instance := middlewares.GetInstance(c)
 		slug := c.Param("slug")
-		if err := permissions.AllowInstallApp(c, installerType, permissions.POST); err != nil {
+		if err := middlewares.AllowInstallApp(c, installerType, permissions.POST); err != nil {
 			return err
 		}
 		registries, err := instance.Registries()
@@ -155,7 +156,7 @@ func updateHandler(installerType apps.AppType) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		instance := middlewares.GetInstance(c)
 		slug := c.Param("slug")
-		if err := permissions.AllowInstallApp(c, installerType, permissions.POST); err != nil {
+		if err := middlewares.AllowInstallApp(c, installerType, permissions.POST); err != nil {
 			return err
 		}
 		registries, err := instance.Registries()
@@ -179,6 +180,8 @@ func updateHandler(installerType apps.AppType) echo.HandlerFunc {
 			w.Header().Set("Content-Type", typeTextEventStream)
 			w.WriteHeader(200)
 		}
+
+		permissionsAcked, _ := strconv.ParseBool(c.QueryParam("PermissionsAcked"))
 		inst, err := apps.NewInstaller(instance, instance.AppsCopier(installerType),
 			&apps.InstallerOptions{
 				Operation:  apps.Update,
@@ -187,6 +190,7 @@ func updateHandler(installerType apps.AppType) echo.HandlerFunc {
 				Slug:       slug,
 				Registries: registries,
 
+				PermissionsAcked:    permissionsAcked,
 				OverridenParameters: overridenParameters,
 			},
 		)
@@ -212,7 +216,7 @@ func deleteHandler(installerType apps.AppType) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		instance := middlewares.GetInstance(c)
 		slug := c.Param("slug")
-		if err := permissions.AllowInstallApp(c, installerType, permissions.DELETE); err != nil {
+		if err := middlewares.AllowInstallApp(c, installerType, permissions.DELETE); err != nil {
 			return err
 		}
 		registries, err := instance.Registries()
@@ -290,7 +294,7 @@ func writeStream(w http.ResponseWriter, event string, b string) {
 // installed applications.
 func listWebappsHandler(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
-	if err := permissions.AllowWholeType(c, permissions.GET, consts.Apps); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, consts.Apps); err != nil {
 		return err
 	}
 	docs, err := apps.ListWebapps(instance)
@@ -309,7 +313,7 @@ func listWebappsHandler(c echo.Context) error {
 // installed applications.
 func listKonnectorsHandler(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
-	if err := permissions.AllowWholeType(c, permissions.GET, consts.Konnectors); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, consts.Konnectors); err != nil {
 		return err
 	}
 	docs, err := apps.ListKonnectors(instance)
@@ -333,7 +337,7 @@ func iconHandler(appType apps.AppType) echo.HandlerFunc {
 			return err
 		}
 
-		if err = permissions.Allow(c, permissions.GET, app); err != nil {
+		if err = middlewares.Allow(c, permissions.GET, app); err != nil {
 			return err
 		}
 

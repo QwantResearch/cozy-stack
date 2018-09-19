@@ -10,7 +10,7 @@ with a new experience. You can install Cozy on your own hardware where no one
 profiles you.
 
 ```
-cozy-stack [flags]
+cozy-stack <command> [flags]
 ```
 
 ### Options
@@ -34,6 +34,7 @@ cozy-stack [flags]
 * [cozy-stack files](cozy-stack_files.md)	 - Interact with the cozy filesystem
 * [cozy-stack fixer](cozy-stack_fixer.md)	 - A set of tools to fix issues or migrate content for retro-compatibility.
 * [cozy-stack instances](cozy-stack_instances.md)	 - Manage instances of a stack
+* [cozy-stack jobs](cozy-stack_jobs.md)	 - Launch and manage jobs and workers
 * [cozy-stack konnectors](cozy-stack_konnectors.md)	 - Interact with the konnectors
 * [cozy-stack serve](cozy-stack_serve.md)	 - Starts the stack and listens for HTTP calls
 * [cozy-stack settings](cozy-stack_settings.md)	 - Display and update settings

@@ -22,7 +22,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/sharing"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	webpermissions "github.com/cozy/cozy-stack/web/permissions"
 	"github.com/cozy/echo"
 	"github.com/cozy/echo/middleware"
 )
@@ -44,7 +43,7 @@ func Home(c echo.Context) error {
 
 	if session, ok := middlewares.GetSession(c); ok {
 		redirect := instance.DefaultRedirection()
-		redirect = addCodeToRedirect(redirect, instance.Domain, session.ID())
+		redirect = addCodeToRedirect(redirect, instance.ContextualDomain(), session.ID())
 		cookie, err := session.ToCookie()
 		if err != nil {
 			return err
@@ -54,9 +53,9 @@ func Home(c echo.Context) error {
 	}
 
 	if len(instance.RegisterToken) > 0 {
-		if !webpermissions.CheckRegisterToken(c, instance) {
+		if !middlewares.CheckRegisterToken(c, instance) {
 			return c.Render(http.StatusOK, "need_onboarding.html", echo.Map{
-				"Domain": instance.Domain,
+				"Domain": instance.ContextualDomain(),
 				"Locale": instance.Locale,
 			})
 		}
@@ -89,9 +88,9 @@ func addCodeToRedirect(redirect *url.URL, domain, sessionID string) *url.URL {
 }
 
 // SetCookieForNewSession creates a new session and sets the cookie on echo context
-func SetCookieForNewSession(c echo.Context) (string, error) {
+func SetCookieForNewSession(c echo.Context, longRunSession bool) (string, error) {
 	instance := middlewares.GetInstance(c)
-	session, err := sessions.New(instance)
+	session, err := sessions.New(instance, longRunSession)
 	if err != nil {
 		return "", err
 	}
@@ -112,6 +111,12 @@ func renderLoginForm(c echo.Context, i *instance.Instance, code int, credsErrors
 	}
 
 	redirectStr := redirect.String()
+	redirectQuery := redirect.Query()
+
+	var clientScope string
+	if clientScopes := redirectQuery["scope"]; len(clientScopes) > 0 {
+		clientScope = clientScopes[0]
+	}
 
 	if c.QueryParam("msg") == "passphrase-reset-requested" {
 		title = i.Translate("Login Connect after reset requested title")
@@ -119,10 +124,10 @@ func renderLoginForm(c echo.Context, i *instance.Instance, code int, credsErrors
 	} else if strings.Contains(redirectStr, "reconnect") {
 		title = i.Translate("Login Reconnect title")
 		help = i.Translate("Login Reconnect help")
-	} else if redirect.Host == i.Domain && redirect.Path == "/auth/authorize" {
+	} else if i.HasDomain(redirect.Host) && redirect.Path == "/auth/authorize" && clientScope != oauth.ScopeLogin {
 		title = i.Translate("Login Connect from oauth title")
 		help = i.Translate("Login Connect from oauth help")
-	} else if redirect.Host == i.Domain && redirect.Path == "/auth/authorize/sharing" {
+	} else if i.HasDomain(redirect.Host) && redirect.Path == "/auth/authorize/sharing" {
 		title = i.Translate("Login Connect from sharing title", publicName)
 		help = i.Translate("Login Connect from sharing help")
 	} else {
@@ -135,7 +140,7 @@ func renderLoginForm(c echo.Context, i *instance.Instance, code int, credsErrors
 	}
 
 	return c.Render(code, "login.html", echo.Map{
-		"Domain":           i.Domain,
+		"Domain":           i.ContextualDomain(),
 		"Locale":           i.Locale,
 		"Title":            title,
 		"PasswordHelp":     help,
@@ -147,7 +152,7 @@ func renderLoginForm(c echo.Context, i *instance.Instance, code int, credsErrors
 	})
 }
 
-func renderTwoFactorForm(c echo.Context, i *instance.Instance, code int, redirect *url.URL, twoFactorToken []byte) error {
+func renderTwoFactorForm(c echo.Context, i *instance.Instance, code int, redirect *url.URL, twoFactorToken []byte, longRunSession bool) error {
 	var title string
 	publicName, err := i.PublicName()
 	if err != nil {
@@ -159,12 +164,13 @@ func renderTwoFactorForm(c echo.Context, i *instance.Instance, code int, redirec
 		title = i.Translate("Login Welcome name", publicName)
 	}
 	return c.Render(code, "login.html", echo.Map{
-		"Domain":           i.Domain,
+		"Domain":           i.ContextualDomain(),
 		"Locale":           i.Locale,
 		"Title":            title,
 		"PasswordHelp":     "",
 		"CredentialsError": nil,
 		"Redirect":         redirect.String(),
+		"LongRunSession":   longRunSession,
 		"TwoFactorForm":    true,
 		"TwoFactorToken":   string(twoFactorToken),
 		"CSRF":             c.Get("csrf"),
@@ -181,7 +187,7 @@ func loginForm(c echo.Context) error {
 
 	session, ok := middlewares.GetSession(c)
 	if ok {
-		redirect = addCodeToRedirect(redirect, instance.Domain, session.ID())
+		redirect = addCodeToRedirect(redirect, instance.ContextualDomain(), session.ID())
 		cookie, err := session.ToCookie()
 		if err != nil {
 			return err
@@ -208,6 +214,7 @@ func login(c echo.Context) error {
 	twoFactorTrustedDeviceToken := []byte(c.FormValue("two-factor-trusted-device-token"))
 	twoFactorGenerateTrustedDeviceToken, _ := strconv.ParseBool(c.FormValue("two-factor-generate-trusted-device-token"))
 	passphrase := []byte(c.FormValue("passphrase"))
+	longRunSession, _ := strconv.ParseBool(c.FormValue("long-run-session"))
 
 	var twoFactorGeneratedTrustedDeviceToken []byte
 
@@ -247,7 +254,7 @@ func login(c echo.Context) error {
 							"two_factor_token": string(twoFactorToken),
 						})
 					}
-					return renderTwoFactorForm(c, inst, http.StatusOK, redirect, twoFactorToken)
+					return renderTwoFactorForm(c, inst, http.StatusOK, redirect, twoFactorToken, longRunSession)
 				}
 			default:
 				successfulAuthentication = true
@@ -256,12 +263,12 @@ func login(c echo.Context) error {
 	}
 
 	if successfulAuthentication {
-		if sessionID, err = SetCookieForNewSession(c); err != nil {
+		if sessionID, err = SetCookieForNewSession(c, longRunSession); err != nil {
 			return err
 		}
 
 		var clientID string
-		if redirect.Host == inst.Domain && redirect.Path == "/auth/authorize" {
+		if inst.HasDomain(redirect.Host) && redirect.Path == "/auth/authorize" {
 			clientID = redirect.Query().Get("client_id")
 		}
 
@@ -288,7 +295,7 @@ func login(c echo.Context) error {
 	}
 
 	// logged-in
-	redirect = addCodeToRedirect(redirect, inst.Domain, sessionID)
+	redirect = addCodeToRedirect(redirect, inst.ContextualDomain(), sessionID)
 	if wantsJSON {
 		result := echo.Map{"redirect": redirect.String()}
 		if len(twoFactorGeneratedTrustedDeviceToken) > 0 {
@@ -307,7 +314,7 @@ func logout(c echo.Context) error {
 	res.Header().Set(echo.HeaderAccessControlAllowCredentials, "true")
 
 	instance := middlewares.GetInstance(c)
-	if !webpermissions.AllowLogout(c) {
+	if !middlewares.AllowLogout(c) {
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "The user can logout only from client-side apps",
 		})
@@ -328,7 +335,7 @@ func logoutOthers(c echo.Context) error {
 	res.Header().Set(echo.HeaderAccessControlAllowCredentials, "true")
 
 	instance := middlewares.GetInstance(c)
-	if !webpermissions.AllowLogout(c) {
+	if !middlewares.AllowLogout(c) {
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "The user can logout only from client-side apps",
 		})
@@ -386,9 +393,9 @@ func checkRedirectParam(c echo.Context, defaultRedirect *url.URL) (*url.URL, err
 	}
 
 	instance := middlewares.GetInstance(c)
-	if u.Host != instance.Domain {
+	if !instance.HasDomain(u.Host) {
 		instanceHost, appSlug, _ := middlewares.SplitHost(u.Host)
-		if instanceHost != instance.Domain || appSlug == "" {
+		if !instance.HasDomain(instanceHost) || appSlug == "" {
 			return nil, echo.NewHTTPError(http.StatusBadRequest,
 				"bad url: should be subdomain")
 		}
@@ -412,6 +419,18 @@ func registerClient(c echo.Context) error {
 		return err
 	}
 	instance := middlewares.GetInstance(c)
+	// We do not allow the creation of clients allowed to have an empty scope
+	// ("login" scope), except via the CLI.
+	if client.AllowLoginScope {
+		perm, err := middlewares.GetPermission(c)
+		if err != nil {
+			return err
+		}
+		if perm.Type != permissions.TypeCLI {
+			return echo.NewHTTPError(http.StatusUnauthorized,
+				"Not authorized to create client with given parameters")
+		}
+	}
 	if err := client.Create(instance); err != nil {
 		return c.JSON(err.Code, err)
 	}
@@ -460,31 +479,31 @@ type authorizeParams struct {
 func checkAuthorizeParams(c echo.Context, params *authorizeParams) (bool, error) {
 	if params.state == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No state parameter",
 		})
 	}
 	if params.clientID == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No client_id parameter",
 		})
 	}
 	if params.redirectURI == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No redirect_uri parameter",
 		})
 	}
 	if params.resType != "code" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error Invalid response type",
 		})
 	}
 	if params.scope == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No scope parameter",
 		})
 	}
@@ -492,14 +511,20 @@ func checkAuthorizeParams(c echo.Context, params *authorizeParams) (bool, error)
 	params.client = new(oauth.Client)
 	if err := couchdb.GetDoc(params.instance, consts.OAuthClients, params.clientID, params.client); err != nil {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No registered client",
 		})
 	}
 	if !params.client.AcceptRedirectURI(params.redirectURI) {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error Incorrect redirect_uri",
+		})
+	}
+	if params.scope == oauth.ScopeLogin && !params.client.AllowLoginScope {
+		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
+			"Domain": params.instance.ContextualDomain(),
+			"Error":  "Error No scope parameter",
 		})
 	}
 
@@ -528,10 +553,39 @@ func authorizeForm(c echo.Context) error {
 		return c.Redirect(http.StatusSeeOther, u)
 	}
 
+	// For a scope "login": such client is only used to transmit authentication
+	// for the manager. It does not require any authorization from the user, and
+	// generate a code without asking any permission.
+	if params.scope == oauth.ScopeLogin {
+		access, err := oauth.CreateAccessCode(params.instance, params.clientID, "" /* = scope */)
+		if err != nil {
+			return err
+		}
+
+		u, err := url.ParseRequestURI(params.redirectURI)
+		if err != nil {
+			return c.Render(http.StatusBadRequest, "error.html", echo.Map{
+				"Domain": instance.ContextualDomain(),
+				"Error":  "Error Invalid redirect_uri",
+			})
+		}
+
+		q := u.Query()
+		// We should be sending "code" only, but for compatibility reason, we keep
+		// the access_code parameter that we used to send in our first impl.
+		q.Set("access_code", access.Code)
+		q.Set("code", access.Code)
+		q.Set("state", params.state)
+		u.RawQuery = q.Encode()
+		u.Fragment = ""
+
+		return c.Redirect(http.StatusFound, u.String()+"#")
+	}
+
 	permissions, err := permissions.UnmarshalScopeString(params.scope)
 	if err != nil {
 		return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  "Error Invalid scope",
 		})
 	}
@@ -565,7 +619,7 @@ func authorizeForm(c echo.Context) error {
 	}
 
 	return c.Render(http.StatusOK, "authorize.html", echo.Map{
-		"Domain":       instance.Domain,
+		"Domain":       instance.ContextualDomain(),
 		"ClientDomain": clientDomain,
 		"Locale":       instance.Locale,
 		"Client":       params.client,
@@ -595,7 +649,7 @@ func authorize(c echo.Context) error {
 
 	if !middlewares.IsLoggedIn(c) {
 		return c.Render(http.StatusUnauthorized, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  "Error Must be authenticated",
 		})
 	}
@@ -603,7 +657,7 @@ func authorize(c echo.Context) error {
 	u, err := url.ParseRequestURI(params.redirectURI)
 	if err != nil {
 		return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  "Error Invalid redirect_uri",
 		})
 	}
@@ -614,9 +668,11 @@ func authorize(c echo.Context) error {
 	}
 
 	q := u.Query()
+	// We should be sending "code" only, but for compatibility reason, we keep
+	// the access_code parameter that we used to send in our first impl.
 	q.Set("access_code", access.Code)
+	q.Set("code", access.Code)
 	q.Set("state", params.state)
-	q.Set("client_id", params.clientID)
 	u.RawQuery = q.Encode()
 	u.Fragment = ""
 
@@ -632,13 +688,13 @@ type authorizeSharingParams struct {
 func checkAuthorizeSharingParams(c echo.Context, params *authorizeSharingParams) (bool, error) {
 	if params.state == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No state parameter",
 		})
 	}
 	if params.sharingID == "" {
 		return true, c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": params.instance.Domain,
+			"Domain": params.instance.ContextualDomain(),
 			"Error":  "Error No sharing_id parameter",
 		})
 	}
@@ -665,11 +721,11 @@ func authorizeSharingForm(c echo.Context) error {
 	}
 
 	s, err := sharing.FindSharing(instance, params.sharingID)
-	if err != nil {
-		return err
-	}
-	if s.Owner || s.Active || len(s.Members) < 2 {
-		return sharing.ErrInvalidSharing
+	if err != nil || s.Owner || s.Active || len(s.Members) < 2 {
+		return c.Render(http.StatusUnauthorized, "error.html", echo.Map{
+			"Domain": instance.ContextualDomain(),
+			"Error":  "Error Invalid sharing",
+		})
 	}
 
 	var sharerDomain string
@@ -682,9 +738,9 @@ func authorizeSharingForm(c echo.Context) error {
 
 	return c.Render(http.StatusOK, "authorize_sharing.html", echo.Map{
 		"Locale":       instance.Locale,
-		"Domain":       instance.Domain,
+		"Domain":       instance.ContextualDomain(),
 		"SharerDomain": sharerDomain,
-		"SharerName":   s.Members[0].Name,
+		"SharerName":   s.Members[0].PrimaryName(),
 		"State":        params.state,
 		"Sharing":      s,
 		"CSRF":         c.Get("csrf"),
@@ -705,7 +761,7 @@ func authorizeSharing(c echo.Context) error {
 
 	if !middlewares.IsLoggedIn(c) {
 		return c.Render(http.StatusUnauthorized, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  "Error Must be authenticated",
 		})
 	}
@@ -721,7 +777,8 @@ func authorizeSharing(c echo.Context) error {
 	if err = s.SendAnswer(instance, params.state); err != nil {
 		return err
 	}
-	return c.Redirect(http.StatusSeeOther, instance.DefaultRedirection().String())
+	redirect := s.RedirectAfterAuthorizeURL(instance)
+	return c.Redirect(http.StatusSeeOther, redirect.String())
 }
 
 func authorizeAppForm(c echo.Context) error {
@@ -741,7 +798,7 @@ func authorizeAppForm(c echo.Context) error {
 
 	permissions := app.Permissions()
 	return c.Render(http.StatusOK, "authorize_app.html", echo.Map{
-		"Domain":      instance.Domain,
+		"Domain":      instance.ContextualDomain(),
 		"Slug":        app.Slug(),
 		"Permissions": permissions,
 		"CSRF":        c.Get("csrf"),
@@ -753,7 +810,7 @@ func authorizeApp(c echo.Context) error {
 
 	if !middlewares.IsLoggedIn(c) {
 		return c.Render(http.StatusUnauthorized, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  "Error Must be authenticated",
 		})
 	}
@@ -767,8 +824,8 @@ func authorizeApp(c echo.Context) error {
 	err = app.Update(instance)
 	if err != nil {
 		return c.Render(http.StatusInternalServerError, "error.html", echo.Map{
-			"Domain": instance.Domain,
-			"Error":  fmt.Sprintf("Could not activate application: %s", err.Error()),
+			"Domain": instance.ContextualDomain(),
+			"Error":  instance.Translate("Could not activate application: %s", err.Error()),
 		})
 	}
 
@@ -781,18 +838,18 @@ func getApp(c echo.Context, instance *instance.Instance, slug string) (apps.Mani
 	if err != nil {
 		if couchdb.IsNotFoundError(err) {
 			return nil, false, c.Render(http.StatusNotFound, "error.html", echo.Map{
-				"Domain": instance.Domain,
+				"Domain": instance.ContextualDomain(),
 				"Error":  `Application should have state "installed"`,
 			})
 		}
 		return nil, false, c.Render(http.StatusInternalServerError, "error.html", echo.Map{
-			"Domain": instance.Domain,
-			"Error":  fmt.Sprintf("Could not fetch application: %s", err.Error()),
+			"Domain": instance.ContextualDomain(),
+			"Error":  instance.Translate("Could not fetch application: %s", err.Error()),
 		})
 	}
 	if app.State() != apps.Installed {
 		return nil, false, c.Render(http.StatusExpectationFailed, "error.html", echo.Map{
-			"Domain": instance.Domain,
+			"Domain": instance.ContextualDomain(),
 			"Error":  `Application should have state "installed"`,
 		})
 	}
@@ -896,7 +953,7 @@ func accessToken(c echo.Context) error {
 		})
 	}
 
-	sessions.RemoveLoginRegistration(instance.Domain, clientID)
+	sessions.RemoveLoginRegistration(instance.ContextualDomain(), clientID)
 	return c.JSON(http.StatusOK, out)
 }
 
@@ -930,7 +987,7 @@ func checkRegistrationToken(next echo.HandlerFunc) echo.HandlerFunc {
 func passphraseResetForm(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	return c.Render(http.StatusOK, "passphrase_reset.html", echo.Map{
-		"Domain": instance.Domain,
+		"Domain": instance.ContextualDomain(),
 		"Locale": instance.Locale,
 		"CSRF":   c.Get("csrf"),
 	})
@@ -952,7 +1009,7 @@ func passphraseReset(c echo.Context) error {
 		c.SetCookie(session.Delete(i))
 	}
 	return c.Render(http.StatusOK, "error.html", echo.Map{
-		"Domain":     i.Domain,
+		"Domain":     i.ContextualDomain(),
 		"ErrorTitle": "Passphrase is reset Title",
 		"Error":      "Passphrase is reset Body",
 		"Button":     "Passphrase is reset Login Button",
@@ -971,14 +1028,14 @@ func passphraseRenewForm(c echo.Context) error {
 	token, err := hex.DecodeString(c.QueryParam("token"))
 	if err != nil || len(token) == 0 {
 		return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": inst.Domain,
+			"Domain": inst.ContextualDomain(),
 			"Error":  "Error Invalid reset token",
 		})
 	}
 	if err = inst.CheckPassphraseRenewToken(token); err != nil {
 		if err == instance.ErrMissingToken {
 			return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-				"Domain": inst.Domain,
+				"Domain": inst.ContextualDomain(),
 				"Error":  "Error Invalid reset token",
 			})
 		}
@@ -987,7 +1044,7 @@ func passphraseRenewForm(c echo.Context) error {
 		})
 	}
 	return c.Render(http.StatusOK, "passphrase_renew.html", echo.Map{
-		"Domain":               inst.Domain,
+		"Domain":               inst.ContextualDomain(),
 		"Locale":               inst.Locale,
 		"PassphraseResetToken": hex.EncodeToString(token),
 		"CSRF":                 c.Get("csrf"),
@@ -1004,14 +1061,14 @@ func passphraseRenew(c echo.Context) error {
 	token, err := hex.DecodeString(c.FormValue("passphrase_reset_token"))
 	if err != nil {
 		return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-			"Domain": inst.Domain,
+			"Domain": inst.ContextualDomain(),
 			"Error":  "Error Invalid reset token",
 		})
 	}
 	if err := inst.PassphraseRenew(pass, token); err != nil {
 		if err == instance.ErrMissingToken {
 			return c.Render(http.StatusBadRequest, "error.html", echo.Map{
-				"Domain": inst.Domain,
+				"Domain": inst.ContextualDomain(),
 				"Error":  "Error Invalid reset token",
 			})
 		}

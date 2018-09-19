@@ -54,6 +54,9 @@ const (
 	Sharings = "io.cozy.sharings"
 	// SharingsAnswer doc type for credentials exchange for sharings
 	SharingsAnswer = "io.cozy.sharings.answer"
+	// SharingsInitialSync doc type for real-time events for initial sync of a
+	// sharing
+	SharingsInitialSync = "io.cozy.sharings.initial-sync"
 	// Triggers doc type for triggers, jobs launchers
 	Triggers = "io.cozy.triggers"
 	// TriggersState doc type for triggers current state, jobs launchers
@@ -74,6 +77,9 @@ const (
 	// StoreSlug is the slug of the store application: it can install
 	// konnectors and applications.
 	StoreSlug = "store"
+	// HomeSlug is the slug of the default app, where the user is redirected
+	// after login.
+	HomeSlug = "home"
 	// CollectSlug is the slug of the collect application: it can install
 	// konnectors and applications.
 	CollectSlug = "collect"
@@ -110,14 +116,9 @@ const (
 	InstanceSettingsID = "io.cozy.settings.instance"
 )
 
-// AppsRegistry is an hard-coded list of known apps, with their source URLs
-// TODO remove it when we will have a true registry
-var AppsRegistry = map[string]string{
-	"onboarding": "git://github.com/cozy/cozy-onboarding-v3.git#latest",
-	"drive":      "git://github.com/cozy/cozy-drive.git#latest-drive",
-	"photos":     "git://github.com/cozy/cozy-drive.git#latest-photos",
-	"settings":   "git://github.com/cozy/cozy-settings.git#latest",
-	"collect":    "git://github.com/cozy/cozy-collect.git#latest",
-	"banks":      "git://github.com/cozy/cozy-banks.git#latest",
-	"contacts":   "git://github.com/cozy/cozy-contacts.git#latest",
+// KnownFlatDomains is a list of top-domains that can hosts cozy instances with
+// flat sub-domains.
+var KnownFlatDomains = []string{
+	"cozy.rocks",
+	"mycozy.cloud",
 }

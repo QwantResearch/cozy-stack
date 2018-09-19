@@ -3,6 +3,7 @@ package couchdb
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -58,10 +59,8 @@ func RTEvent(db Database, verb string, doc, oldDoc Doc) {
 		logger.WithDomain(db.DomainName()).WithField("nspace", "couchdb").
 			Errorf("error in hooks on %s %s %v\n", verb, doc.DocType(), err)
 	}
-	if db != GlobalDB && db != GlobalSecretsDB {
-		docClone := doc.Clone()
-		go realtime.GetHub().Publish(db, verb, docClone, oldDoc)
-	}
+	docClone := doc.Clone()
+	go realtime.GetHub().Publish(db, verb, docClone, oldDoc)
 }
 
 // GlobalDB is the prefix used for stack-scoped db
@@ -514,7 +513,7 @@ func UpdateDoc(db Database, doc Doc) error {
 	}
 
 	url := url.PathEscape(id)
-	// The old doc is requested to be emitted throught RTEvent.
+	// The old doc is requested to be emitted thought RTEvent.
 	// This is useful to keep track of the modifications for the triggers.
 	oldDoc := doc.Clone()
 	err = makeRequest(db, doctype, http.MethodGet, url, nil, oldDoc)
@@ -679,15 +678,38 @@ func DefineViews(db Database, views []*View) error {
 			if err != nil {
 				return err
 			}
-			doc.Rev = old.Rev
-			err = makeRequest(db, v.Doctype, http.MethodPut, url, &doc, nil)
+			if !equalViews(&old, doc) {
+				doc.Rev = old.Rev
+				err = makeRequest(db, v.Doctype, http.MethodPut, url, &doc, nil)
+			} else {
+				err = nil
+			}
 		}
-
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func equalViews(v1 *ViewDesignDoc, v2 *ViewDesignDoc) bool {
+	if v1.Lang != v2.Lang {
+		return false
+	}
+	if len(v1.Views) != len(v2.Views) {
+		return false
+	}
+	for name, view1 := range v1.Views {
+		view2, ok := v2.Views[name]
+		if !ok {
+			return false
+		}
+		if view1.Map != view2.Map ||
+			view1.Reduce != view2.Reduce {
+			return false
+		}
+	}
+	return true
 }
 
 // ExecView executes the specified view function
@@ -773,6 +795,41 @@ func FindDocsRaw(db Database, doctype string, req interface{}, results interface
 	return json.Unmarshal(response.Docs, results)
 }
 
+// NormalDocs returns all the documents from a database, with pagination, but
+// it excludes the design docs.
+func NormalDocs(db Database, doctype string, skip, limit int) (*NormalDocsResponse, error) {
+	var findRes struct {
+		Docs []json.RawMessage `json:"docs"`
+	}
+	req := FindRequest{
+		Selector: mango.Gte("_id", nil),
+		Skip:     skip,
+		Limit:    limit,
+	}
+	err := makeRequest(db, doctype, http.MethodPost, "_find", &req, &findRes)
+	if err != nil {
+		return nil, err
+	}
+	res := NormalDocsResponse{
+		Rows: findRes.Docs,
+	}
+	if len(res.Rows) < limit {
+		res.Total = skip + len(res.Rows)
+	} else {
+		var designRes ViewResponse
+		err = makeRequest(db, doctype, http.MethodGet, "_design_docs", nil, &designRes)
+		if err != nil {
+			return nil, err
+		}
+		if designRes.Offset+designRes.Total < skip+len(res.Rows) {
+			// https://github.com/apache/couchdb/issues/1603
+			return nil, errors.New("Unexpected state")
+		}
+		res.Total = designRes.Total - len(designRes.Rows)
+	}
+	return &res, nil
+}
+
 func validateDocID(id string) (string, error) {
 	if len(id) > 0 && id[0] == '_' {
 		return "", newBadIDError(id)
@@ -854,8 +911,9 @@ type ViewResponseRow struct {
 
 // ViewResponse is the response we receive when executing a view
 type ViewResponse struct {
-	Total int                `json:"total_rows"`
-	Rows  []*ViewResponseRow `json:"rows"`
+	Total  int                `json:"total_rows"`
+	Offset int                `json:"offset,omitempty"`
+	Rows   []*ViewResponseRow `json:"rows"`
 }
 
 // DBStatusResponse is the response from DBStatus
@@ -878,4 +936,10 @@ type DBStatusResponse struct {
 	DataSize          int    `json:"data_size"`
 	CompactRunning    bool   `json:"compact_running"`
 	InstanceStartTime string `json:"instance_start_time"`
+}
+
+// NormalDocsResponse is the response the stack send for _normal_docs queries
+type NormalDocsResponse struct {
+	Total int               `json:"total_rows"`
+	Rows  []json.RawMessage `json:"rows"`
 }

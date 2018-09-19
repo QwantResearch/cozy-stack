@@ -8,7 +8,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/sharing"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	perm "github.com/cozy/cozy-stack/web/permissions"
 	"github.com/cozy/echo"
 )
 
@@ -133,20 +132,78 @@ func FileHandler(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// EndInitial is used for ending the initial sync phase of a sharing
+func EndInitial(c echo.Context) error {
+	inst := middlewares.GetInstance(c)
+	sharingID := c.Param("sharing-id")
+	s, err := sharing.FindSharing(inst, sharingID)
+	if err != nil {
+		return wrapErrors(err)
+	}
+	if err := s.EndInitial(inst); err != nil {
+		return wrapErrors(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // replicatorRoutes sets the routing for the replicator
 func replicatorRoutes(router *echo.Group) {
 	group := router.Group("", checkSharingPermissions)
-	group.POST("/:sharing-id/_revs_diff", RevsDiff, checkSharingPermissions)
-	group.POST("/:sharing-id/_bulk_docs", BulkDocs, checkSharingPermissions)
-	group.GET("/:sharing-id/io.cozy.files/:id", GetFolder, checkSharingPermissions)
-	group.PUT("/:sharing-id/io.cozy.files/:id/metadata", SyncFile, checkSharingPermissions)
-	group.PUT("/:sharing-id/io.cozy.files/:id", FileHandler, checkSharingPermissions)
+	group.POST("/:sharing-id/_revs_diff", RevsDiff, checkSharingWritePermissions)
+	group.POST("/:sharing-id/_bulk_docs", BulkDocs, checkSharingWritePermissions)
+	group.GET("/:sharing-id/io.cozy.files/:id", GetFolder, checkSharingReadPermissions)
+	group.PUT("/:sharing-id/io.cozy.files/:id/metadata", SyncFile, checkSharingWritePermissions)
+	group.PUT("/:sharing-id/io.cozy.files/:id", FileHandler, checkSharingWritePermissions)
+	group.DELETE("/:sharing-id/initial", EndInitial, checkSharingWritePermissions)
+}
+
+func checkSharingReadPermissions(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		sharingID := c.Param("sharing-id")
+		requestPerm, err := middlewares.GetPermission(c)
+		if err != nil {
+			middlewares.GetInstance(c).Logger().WithField("nspace", "replicator").
+				Debugf("Invalid permission: %s", err)
+			return err
+		}
+		if !requestPerm.Permissions.AllowID("GET", consts.Sharings, sharingID) {
+			middlewares.GetInstance(c).Logger().WithField("nspace", "replicator").
+				Debugf("Not allowed (%s)", sharingID)
+			return echo.NewHTTPError(http.StatusForbidden)
+		}
+		return next(c)
+	}
+}
+
+func checkSharingWritePermissions(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if err := hasSharingWritePermissions(c); err != nil {
+			return err
+		}
+		return next(c)
+	}
+}
+
+func hasSharingWritePermissions(c echo.Context) error {
+	sharingID := c.Param("sharing-id")
+	requestPerm, err := middlewares.GetPermission(c)
+	if err != nil {
+		middlewares.GetInstance(c).Logger().WithField("nspace", "replicator").
+			Debugf("Invalid permission: %s", err)
+		return err
+	}
+	if !requestPerm.Permissions.AllowID("POST", consts.Sharings, sharingID) {
+		middlewares.GetInstance(c).Logger().WithField("nspace", "replicator").
+			Debugf("Not allowed (%s)", sharingID)
+		return echo.NewHTTPError(http.StatusForbidden)
+	}
+	return nil
 }
 
 func checkSharingPermissions(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		sharingID := c.Param("sharing-id")
-		requestPerm, err := perm.GetPermission(c)
+		requestPerm, err := middlewares.GetPermission(c)
 		if err != nil {
 			middlewares.GetInstance(c).Logger().WithField("nspace", "replicator").
 				Debugf("Invalid permission: %s", err)
@@ -162,7 +219,7 @@ func checkSharingPermissions(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 func requestMember(c echo.Context, s *sharing.Sharing) (*sharing.Member, error) {
-	requestPerm, err := perm.GetPermission(c)
+	requestPerm, err := middlewares.GetPermission(c)
 	if err != nil {
 		return nil, err
 	}

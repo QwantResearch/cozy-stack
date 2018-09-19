@@ -7,15 +7,18 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"time"
 
 	"github.com/cozy/cozy-stack/client/auth"
 	"github.com/cozy/cozy-stack/client/request"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/contacts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/permissions"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/web/jsonapi"
 )
 
 const (
@@ -40,6 +43,18 @@ type Member struct {
 	PublicName string `json:"public_name,omitempty"`
 	Email      string `json:"email"`
 	Instance   string `json:"instance,omitempty"`
+	ReadOnly   bool   `json:"read_only,omitempty"`
+}
+
+// PrimaryName returns the main name of this member
+func (m *Member) PrimaryName() string {
+	if m.Name != "" {
+		return m.Name
+	}
+	if m.PublicName != "" {
+		return m.PublicName
+	}
+	return m.Email
 }
 
 // Credentials is the struct with the secret stuff used for authentication &
@@ -60,8 +75,30 @@ type Credentials struct {
 	InboundClientID string `json:"inbound_client_id,omitempty"`
 }
 
+// AddContacts adds a list of contacts on the sharer cozy
+func (s *Sharing) AddContacts(inst *instance.Instance, contactIDs map[string]bool) error {
+	for id, ro := range contactIDs {
+		if err := s.AddContact(inst, id, ro); err != nil {
+			return err
+		}
+	}
+	var err error
+	var codes map[string]string
+	if s.PreviewPath != "" {
+		if codes, err = s.CreatePreviewPermissions(inst); err != nil {
+			return err
+		}
+	}
+	if err = s.SendMails(inst, codes); err != nil {
+		return err
+	}
+	cloned := s.Clone().(*Sharing)
+	go cloned.NotifyRecipients(inst, nil)
+	return nil
+}
+
 // AddContact adds the contact with the given identifier
-func (s *Sharing) AddContact(inst *instance.Instance, contactID string) error {
+func (s *Sharing) AddContact(inst *instance.Instance, contactID string, readOnly bool) error {
 	c, err := contacts.Find(inst, contactID)
 	if err != nil {
 		return err
@@ -75,6 +112,176 @@ func (s *Sharing) AddContact(inst *instance.Instance, contactID string) error {
 		Name:     addr.Name,
 		Email:    addr.Email,
 		Instance: c.PrimaryCozyURL(),
+		ReadOnly: readOnly,
+	}
+	idx := -1
+	for i, member := range s.Members {
+		if i == 0 {
+			continue // Skip the owner
+		}
+		if m.Email == member.Email && member.Status != MemberStatusReady {
+			idx = i
+			s.Members[i].Status = m.Status
+			s.Members[i].Name = m.Name
+			s.Members[i].Instance = m.Instance
+			s.Members[i].ReadOnly = m.ReadOnly
+		}
+	}
+	if idx < 1 {
+		s.Members = append(s.Members, m)
+	}
+	state := crypto.Base64Encode(crypto.GenerateRandomBytes(StateLen))
+	creds := Credentials{
+		State:  string(state),
+		XorKey: MakeXorKey(),
+	}
+	if idx < 1 {
+		s.Credentials = append(s.Credentials, creds)
+	} else {
+		s.Credentials[idx-1] = creds
+	}
+	return nil
+}
+
+// APIDelegateAddContacts is used to serialize a request to add contacts to
+// JSON-API
+type APIDelegateAddContacts struct {
+	sid     string
+	members []Member
+}
+
+// ID returns the sharing qualified identifier
+func (a *APIDelegateAddContacts) ID() string { return a.sid }
+
+// Rev returns the sharing revision
+func (a *APIDelegateAddContacts) Rev() string { return "" }
+
+// DocType returns the sharing document type
+func (a *APIDelegateAddContacts) DocType() string { return consts.Sharings }
+
+// SetID changes the sharing qualified identifier
+func (a *APIDelegateAddContacts) SetID(id string) {}
+
+// SetRev changes the sharing revision
+func (a *APIDelegateAddContacts) SetRev(rev string) {}
+
+// Clone is part of jsonapi.Object interface
+func (a *APIDelegateAddContacts) Clone() couchdb.Doc {
+	panic("APIDelegateAddContacts must not be cloned")
+}
+
+// Links is part of jsonapi.Object interface
+func (a *APIDelegateAddContacts) Links() *jsonapi.LinksList { return nil }
+
+// Included is part of jsonapi.Object interface
+func (a *APIDelegateAddContacts) Included() []jsonapi.Object { return nil }
+
+// Relationships is part of jsonapi.Object interface
+func (a *APIDelegateAddContacts) Relationships() jsonapi.RelationshipMap {
+	return jsonapi.RelationshipMap{
+		"recipients": jsonapi.Relationship{
+			Data: a.members,
+		},
+	}
+}
+
+var _ jsonapi.Object = (*APIDelegateAddContacts)(nil)
+
+// DelegateAddContacts adds a list of contacts on a recipient cozy. Part of
+// the work is delegated to owner cozy, but the invitation mail is still sent
+// from the recipient cozy.
+func (s *Sharing) DelegateAddContacts(inst *instance.Instance, contactIDs map[string]bool) error {
+	api := &APIDelegateAddContacts{}
+	api.sid = s.SID
+	for id, ro := range contactIDs {
+		c, err := contacts.Find(inst, id)
+		if err != nil {
+			return err
+		}
+		addr, err := c.ToMailAddress()
+		if err != nil {
+			return err
+		}
+		m := Member{
+			Status:   MemberStatusMailNotSent,
+			Name:     addr.Name,
+			Email:    addr.Email,
+			Instance: c.PrimaryCozyURL(),
+			ReadOnly: ro,
+		}
+		api.members = append(api.members, m)
+	}
+	data, err := jsonapi.MarshalObject(api)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(jsonapi.Document{Data: &data})
+	if err != nil {
+		return err
+	}
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return err
+	}
+	c := &s.Credentials[0]
+	opts := &request.Options{
+		Method: http.MethodPost,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   "/sharings/" + s.SID + "/recipients/delegated",
+		Headers: request.Headers{
+			"Accept":        "application/json",
+			"Content-Type":  "application/vnd.api+json",
+			"Authorization": "Bearer " + c.AccessToken.AccessToken,
+		},
+		Body: bytes.NewReader(body),
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[0], c, opts, body)
+	}
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ErrInternalServerError
+	}
+	var states map[string]string
+	if err = json.NewDecoder(res.Body).Decode(&states); err != nil {
+		return err
+	}
+	for _, m := range api.members {
+		found := false
+		for i, member := range s.Members {
+			if i == 0 {
+				continue // skip the owner
+			}
+			if m.Email == member.Email && member.Status != MemberStatusReady {
+				found = true
+				s.Members[i].Status = m.Status
+				s.Members[i].Name = m.Name
+				s.Members[i].Instance = m.Instance
+				s.Members[i].ReadOnly = m.ReadOnly
+			}
+		}
+		if !found {
+			s.Members = append(s.Members, m)
+		}
+	}
+	if err := couchdb.UpdateDoc(inst, s); err != nil {
+		return err
+	}
+	return s.SendMailsToMembers(inst, api.members, states)
+}
+
+// AddDelegatedContact adds a contact on the owner cozy, but for a contact from
+// a recipient (open_sharing: true only)
+func (s *Sharing) AddDelegatedContact(inst *instance.Instance, email string, readOnly bool) string {
+	m := Member{
+		Status:   MemberStatusPendingInvitation,
+		Email:    email,
+		ReadOnly: readOnly,
 	}
 	s.Members = append(s.Members, m)
 	state := crypto.Base64Encode(crypto.GenerateRandomBytes(StateLen))
@@ -83,7 +290,51 @@ func (s *Sharing) AddContact(inst *instance.Instance, contactID string) error {
 		XorKey: MakeXorKey(),
 	}
 	s.Credentials = append(s.Credentials, creds)
-	return nil
+	return creds.State
+}
+
+// DelegateDiscovery delegates the POST discovery when a recipient has invited
+// another person to a sharing, and this person accepts the sharing on the
+// recipient cozy. The calls is delegated to the owner cozy.
+func (s *Sharing) DelegateDiscovery(inst *instance.Instance, state, cozyURL string) (string, error) {
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return "", err
+	}
+	v := url.Values{}
+	v.Add("state", state)
+	v.Add("url", cozyURL)
+	body := []byte(v.Encode())
+	c := &s.Credentials[0]
+	opts := &request.Options{
+		Method: http.MethodPost,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   "/sharings/" + s.SID + "/discovery",
+		Headers: request.Headers{
+			"Accept":        "application/json",
+			"Content-Type":  "application/x-www-form-urlencoded",
+			"Authorization": "Bearer " + c.AccessToken.AccessToken,
+		},
+		Body: bytes.NewReader(body),
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[0], c, opts, body)
+	}
+	if err != nil {
+		if res != nil && res.StatusCode == http.StatusBadRequest {
+			return "", ErrInvalidURL
+		}
+		return "", err
+	}
+	defer res.Body.Close()
+	var success map[string]string
+	if err = json.NewDecoder(res.Body).Decode(&success); err != nil {
+		return "", err
+	}
+	PersistInstanceURL(inst, success["email"], cozyURL)
+	return success["redirect"], nil
 }
 
 // UpdateRecipients updates the list of recipients
@@ -100,8 +351,32 @@ func (s *Sharing) UpdateRecipients(inst *instance.Instance, members []Member) er
 		s.Members[i].Email = m.Email
 		s.Members[i].PublicName = m.PublicName
 		s.Members[i].Status = m.Status
+		s.Members[i].ReadOnly = m.ReadOnly
 	}
 	return couchdb.UpdateDoc(inst, s)
+}
+
+// PersistInstanceURL updates the io.cozy.contacts document with the Cozy
+// instance URL
+func PersistInstanceURL(inst *instance.Instance, email, cozyURL string) {
+	if email == "" || cozyURL == "" {
+		return
+	}
+	contact, err := contacts.FindByEmail(inst, email)
+	if err != nil {
+		return
+	}
+	for _, cozy := range contact.Cozy {
+		if cozy.URL == cozyURL {
+			return
+		}
+	}
+	cozy := contacts.Cozy{URL: cozyURL}
+	contact.Cozy = append([]contacts.Cozy{cozy}, contact.Cozy...)
+	if err := couchdb.UpdateDoc(inst, contact); err != nil {
+		inst.Logger().WithField("nspace", "sharing").
+			Warnf("Error on saving contact: %s", err)
+	}
 }
 
 // FindMemberByState returns the member that is linked to the sharing by
@@ -189,7 +464,282 @@ func (c *Credentials) Refresh(inst *instance.Instance, s *Sharing, m *Member) er
 		return err
 	}
 	c.AccessToken.AccessToken = token.AccessToken
+	if err = couchdb.UpdateDoc(inst, s); err != nil && !couchdb.IsConflictError(err) {
+		return err
+	}
+	return nil
+}
+
+// AddReadOnlyFlag adds the read-only flag of a recipient, and send
+// an access token with a short validity to let it synchronize its last
+// changes.
+func (s *Sharing) AddReadOnlyFlag(inst *instance.Instance, index int) error {
+	if index <= 1 {
+		return ErrMemberNotFound
+	}
+	if s.ReadOnly() {
+		return ErrInvalidSharing
+	}
+	if s.Members[index].ReadOnly {
+		return nil
+	}
+	s.Members[index].ReadOnly = true
+
+	ac := APICredentials{
+		CID:         s.SID,
+		Credentials: &Credentials{},
+	}
+	// We can't just revoke the tokens for the recipient (they are persisted
+	// on this cozy), so we have to revoke the client. And we create a new
+	// client for the temporary access token used to synchronize the last
+	// changes (the recipient won't have a refresh token).
+	cli, err := CreateOAuthClient(inst, &s.Members[index])
+	if err != nil {
+		return err
+	}
+	s.Credentials[index-1].InboundClientID = cli.ClientID
+	ac.Credentials.Client = ConvertOAuthClient(cli)
+	scope := consts.Sharings + ":ALL:" + s.SID
+	issuedAt := time.Now().Add(1*time.Hour - permissions.AccessTokenValidityDuration)
+	access, err := inst.MakeJWT(permissions.AccessTokenAudience, cli.ClientID, scope, "", issuedAt)
+	if err != nil {
+		return err
+	}
+	ac.Credentials.AccessToken = &auth.AccessToken{
+		TokenType:   "bearer",
+		AccessToken: access,
+		// No refresh token
+		Scope: scope,
+	}
+
+	u, err := url.Parse(s.Members[index].Instance)
+	if s.Members[index].Instance == "" || err != nil {
+		return ErrInvalidSharing
+	}
+	data, err := jsonapi.MarshalObject(&ac)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(jsonapi.Document{Data: &data})
+	if err != nil {
+		return err
+	}
+	opts := &request.Options{
+		Method: http.MethodPost,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   "/sharings/" + s.SID + "/recipients/self/readonly",
+		Headers: request.Headers{
+			"Accept":        "application/vnd.api+json",
+			"Content-Type":  "application/vnd.api+json",
+			"Authorization": "Bearer " + s.Credentials[index-1].AccessToken.AccessToken,
+		},
+		Body: bytes.NewReader(body),
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[index], &s.Credentials[index-1], opts, body)
+	}
+	if err != nil {
+		if res != nil {
+			return ErrRequestFailed
+		}
+		return err
+	}
+	defer res.Body.Close()
+
 	return couchdb.UpdateDoc(inst, s)
+}
+
+// DelegateAddReadOnlyFlag is used by a recipient to ask the sharer to
+// add the read-only falg for another member of the sharing.
+func (s *Sharing) DelegateAddReadOnlyFlag(inst *instance.Instance, index int) error {
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return err
+	}
+	c := &s.Credentials[0]
+	opts := &request.Options{
+		Method: http.MethodPost,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   fmt.Sprintf("/sharings/%s/recipients/%d/readonly", s.SID, index),
+		Headers: request.Headers{
+			"Authorization": "Bearer " + c.AccessToken.AccessToken,
+		},
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[0], c, opts, nil)
+	}
+	if err != nil {
+		if res != nil && res.StatusCode == http.StatusBadRequest {
+			return ErrInvalidURL
+		}
+		return err
+	}
+	res.Body.Close()
+	return nil
+}
+
+// DowngradeToReadOnly is used to receive credentials on a read-write instance
+// to sync the last changes before going to read-only mode.
+func (s *Sharing) DowngradeToReadOnly(inst *instance.Instance, creds *APICredentials) error {
+	if s.Owner {
+		return ErrInvalidSharing
+	}
+
+	for i, m := range s.Members {
+		if i > 0 && m.Instance != "" {
+			s.Members[i].ReadOnly = true
+			break
+		}
+	}
+
+	s.Credentials[0].AccessToken = creds.AccessToken
+	s.Credentials[0].Client = creds.Client
+
+	if err := removeSharingTrigger(inst, s.Triggers.ReplicateID); err != nil {
+		return err
+	}
+	s.Triggers.ReplicateID = ""
+	if err := removeSharingTrigger(inst, s.Triggers.UploadID); err != nil {
+		return err
+	}
+	s.Triggers.UploadID = ""
+
+	if err := couchdb.UpdateDoc(inst, s); err != nil {
+		return err
+	}
+
+	s.pushJob(inst, "share-replicate")
+	if s.FirstFilesRule() != nil {
+		s.pushJob(inst, "share-upload")
+	}
+	return nil
+}
+
+// RemoveReadOnlyFlag removes the read-only flag of a recipient, and send
+// credentials to their cozy so that it can push its changes.
+func (s *Sharing) RemoveReadOnlyFlag(inst *instance.Instance, index int) error {
+	if index <= 1 {
+		return ErrMemberNotFound
+	}
+	if s.ReadOnly() {
+		return ErrInvalidSharing
+	}
+	if !s.Members[index].ReadOnly {
+		return nil
+	}
+	s.Members[index].ReadOnly = false
+
+	ac := APICredentials{
+		CID: s.SID,
+		Credentials: &Credentials{
+			XorKey: s.Credentials[index-1].XorKey,
+		},
+	}
+	// Create the credentials for the recipient
+	cli, err := CreateOAuthClient(inst, &s.Members[index])
+	if err != nil {
+		return err
+	}
+	s.Credentials[index-1].InboundClientID = cli.ClientID
+	ac.Credentials.Client = ConvertOAuthClient(cli)
+	token, err := CreateAccessToken(inst, cli, s.SID, permissions.ALL)
+	if err != nil {
+		return err
+	}
+	ac.Credentials.AccessToken = token
+
+	u, err := url.Parse(s.Members[index].Instance)
+	if s.Members[index].Instance == "" || err != nil {
+		return ErrInvalidSharing
+	}
+	data, err := jsonapi.MarshalObject(&ac)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(jsonapi.Document{Data: &data})
+	if err != nil {
+		return err
+	}
+	opts := &request.Options{
+		Method: http.MethodDelete,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   "/sharings/" + s.SID + "/recipients/self/readonly",
+		Headers: request.Headers{
+			"Accept":        "application/vnd.api+json",
+			"Content-Type":  "application/vnd.api+json",
+			"Authorization": "Bearer " + s.Credentials[index-1].AccessToken.AccessToken,
+		},
+		Body: bytes.NewReader(body),
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[index], &s.Credentials[index-1], opts, body)
+	}
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	return couchdb.UpdateDoc(inst, s)
+}
+
+// UpgradeToReadWrite is used to receive credentials on a read-only instance
+// to upgrade it to read-write.
+func (s *Sharing) UpgradeToReadWrite(inst *instance.Instance, creds *APICredentials) error {
+	if s.Owner {
+		return ErrInvalidSharing
+	}
+
+	for i, m := range s.Members {
+		if i > 0 && m.Instance != "" {
+			s.Members[i].ReadOnly = false
+			break
+		}
+	}
+
+	if err := s.SetupReceiver(inst); err != nil {
+		return err
+	}
+
+	s.Credentials[0].XorKey = creds.XorKey
+	s.Credentials[0].AccessToken = creds.AccessToken
+	s.Credentials[0].Client = creds.Client
+	return couchdb.UpdateDoc(inst, s)
+}
+
+// DelegateRemoveReadOnlyFlag is used by a recipient to ask the sharer to
+// remove the read-only falg for another member of the sharing.
+func (s *Sharing) DelegateRemoveReadOnlyFlag(inst *instance.Instance, index int) error {
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return err
+	}
+	c := &s.Credentials[0]
+	opts := &request.Options{
+		Method: http.MethodDelete,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   fmt.Sprintf("/sharings/%s/recipients/%d/readonly", s.SID, index),
+		Headers: request.Headers{
+			"Authorization": "Bearer " + c.AccessToken.AccessToken,
+		},
+	}
+	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, &s.Members[0], c, opts, nil)
+	}
+	if err != nil {
+		if res != nil && res.StatusCode == http.StatusBadRequest {
+			return ErrInvalidURL
+		}
+		return err
+	}
+	res.Body.Close()
+	return nil
 }
 
 // RevokeMember revoke the access granted to a member and contact it
@@ -253,19 +803,16 @@ func (s *Sharing) NotifyMemberRevocation(inst *instance.Instance, m *Member, c *
 		},
 	}
 	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, m, c, opts, nil)
+	}
 	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return ErrInternalServerError
+		}
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode/100 == 5 {
-		return ErrInternalServerError
-	}
-	if res.StatusCode/100 == 4 {
-		if res, err = RefreshToken(inst, s, m, c, opts, nil); err != nil {
-			return err
-		}
-		res.Body.Close()
-	}
 	return nil
 }
 
@@ -296,6 +843,9 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 		}
 	}()
 
+	// XXX Wait a bit to avoid pressure on recipients cozy after delegated operations
+	time.Sleep(3 * time.Second)
+
 	active := false
 	for i, m := range s.Members {
 		if i > 0 && m.Status == MemberStatusReady && &s.Members[i] != except {
@@ -316,6 +866,7 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 			Status:     m.Status,
 			PublicName: m.PublicName,
 			Email:      m.Email,
+			ReadOnly:   m.ReadOnly,
 			// Instance and name are private
 		}
 	}
@@ -350,19 +901,14 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 			Body: bytes.NewReader(body),
 		}
 		res, err := request.Req(opts)
+		if res != nil && res.StatusCode/100 == 4 {
+			res, err = RefreshToken(inst, s, &s.Members[i], c, opts, body)
+		}
 		if err != nil {
 			inst.Logger().WithField("nspace", "sharing").
 				Infof("Can't notify %#v about the updated members list: %s", m, err)
 			continue
 		}
 		res.Body.Close()
-		if res.StatusCode/100 == 4 {
-			if res, err = RefreshToken(inst, s, &s.Members[i], c, opts, body); err != nil {
-				inst.Logger().WithField("nspace", "sharing").
-					Infof("Can't notify %#v about the updated members list: %s", m, err)
-				continue
-			}
-			res.Body.Close()
-		}
 	}
 }

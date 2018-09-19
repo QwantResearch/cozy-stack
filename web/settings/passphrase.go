@@ -29,7 +29,7 @@ func registerPassphrase(c echo.Context) error {
 
 	registerToken, err := hex.DecodeString(args.Register)
 	if err != nil {
-		return jsonapi.NewError(http.StatusBadRequest, err)
+		return jsonapi.Errorf(http.StatusBadRequest, "%s", err)
 	}
 
 	passphrase := []byte(args.Passphrase)
@@ -37,7 +37,8 @@ func registerPassphrase(c echo.Context) error {
 		return jsonapi.BadRequest(err)
 	}
 
-	sessionID, err := auth.SetCookieForNewSession(c)
+	longRunSession := true
+	sessionID, err := auth.SetCookieForNewSession(c, longRunSession)
 	if err != nil {
 		return err
 	}
@@ -50,11 +51,12 @@ func registerPassphrase(c echo.Context) error {
 
 func updatePassphrase(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
+	session, hasSession := middlewares.GetSession(c)
 
 	// Even if the current passphrase is needed for this request to work, we
 	// enforce a valid permission to avoid having an unauthorized enpoint that
 	// can be bruteforced.
-	if err := permissions.AllowWholeType(c, permissions.PUT, consts.Settings); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.PUT, consts.Settings); err != nil {
 		return err
 	}
 
@@ -91,7 +93,12 @@ func updatePassphrase(c echo.Context) error {
 	if err != nil {
 		return jsonapi.BadRequest(err)
 	}
-	if _, err = auth.SetCookieForNewSession(c); err != nil {
+
+	longRunSession := true
+	if hasSession {
+		longRunSession = session.LongRun
+	}
+	if _, err = auth.SetCookieForNewSession(c, longRunSession); err != nil {
 		return err
 	}
 

@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/pkg/accounts"
@@ -14,8 +15,10 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/pkg/vfs"
+	"github.com/cozy/cozy-stack/pkg/workers/updates"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	"github.com/cozy/echo"
 )
@@ -59,6 +62,9 @@ func createHandler(c echo.Context) error {
 		Passphrase: c.QueryParam("Passphrase"),
 		Apps:       utils.SplitTrimString(c.QueryParam("Apps"), ","),
 		Dev:        (c.QueryParam("Dev") == "true"),
+	}
+	if domainAliases := c.QueryParam("DomainAliases"); domainAliases != "" {
+		opts.DomainAliases = strings.Split(domainAliases, ",")
 	}
 	if autoUpdate := c.QueryParam("AutoUpdate"); autoUpdate != "" {
 		var b bool
@@ -113,6 +119,9 @@ func modifyHandler(c echo.Context) error {
 		PublicName:  c.QueryParam("PublicName"),
 		Settings:    c.QueryParam("Settings"),
 	}
+	if domainAliases := c.QueryParam("DomainAliases"); domainAliases != "" {
+		opts.DomainAliases = strings.Split(domainAliases, ",")
+	}
 	if swiftCluster := c.QueryParam("SwiftCluster"); swiftCluster != "" {
 		i, err := strconv.ParseInt(swiftCluster, 10, 64)
 		if err != nil {
@@ -132,6 +141,9 @@ func modifyHandler(c echo.Context) error {
 	}
 	if debug, err := strconv.ParseBool(c.QueryParam("Debug")); err == nil {
 		opts.Debug = &debug
+	}
+	if blocked, err := strconv.ParseBool(c.QueryParam("Blocked")); err == nil {
+		opts.Blocked = &blocked
 	}
 	i, err := instance.Get(domain)
 	if err != nil {
@@ -330,6 +342,36 @@ func cleanOrphanAccounts(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, results)
+}
+
+func updatesHandler(c echo.Context) error {
+	slugs := utils.SplitTrimString(c.QueryParam("Slugs"), ",")
+	domain := c.QueryParam("Domain")
+	domainsWithContext := c.QueryParam("DomainsWithContext")
+	forceRegistry, _ := strconv.ParseBool(c.QueryParam("ForceRegistry"))
+	onlyRegistry, _ := strconv.ParseBool(c.QueryParam("OnlyRegistry"))
+	msg, err := jobs.NewMessage(&updates.Options{
+		Slugs:              slugs,
+		Force:              true,
+		ForceRegistry:      forceRegistry,
+		OnlyRegistry:       onlyRegistry,
+		Domain:             domain,
+		DomainsWithContext: domainsWithContext,
+		AllDomains:         domain == "",
+	})
+	if err != nil {
+		return err
+	}
+	job, err := jobs.System().PushJob(prefixer.GlobalPrefixer, &jobs.JobRequest{
+		WorkerType:  "updates",
+		Message:     msg,
+		Admin:       true,
+		ForwardLogs: true,
+	})
+	if err != nil {
+		return wrapError(err)
+	}
+	return c.JSON(http.StatusOK, job)
 }
 
 func wrapError(err error) error {

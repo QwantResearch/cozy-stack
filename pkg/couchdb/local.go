@@ -6,7 +6,7 @@ import (
 )
 
 // GetLocal fetch a local document from CouchDB
-// http://docs.couchdb.org/en/2.1.1/api/local.html#get--db-_local-docid
+// http://docs.couchdb.org/en/stable/api/local.html#get--db-_local-docid
 func GetLocal(db Database, doctype, id string) (map[string]interface{}, error) {
 	var out map[string]interface{}
 	u := "_local/" + url.PathEscape(id)
@@ -26,4 +26,10 @@ func PutLocal(db Database, doctype, id string, doc map[string]interface{}) error
 	}
 	doc["_rev"] = out.Rev
 	return nil
+}
+
+// DeleteLocal will delete a local document in CouchDB.
+func DeleteLocal(db Database, doctype, id string) error {
+	u := "_local/" + url.PathEscape(id)
+	return makeRequest(db, doctype, http.MethodDelete, u, nil, nil)
 }

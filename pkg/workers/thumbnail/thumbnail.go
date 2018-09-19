@@ -29,7 +29,8 @@ var formats = map[string]string{
 	"large":  "1920x1080",
 }
 
-var formatsNames = []string{
+// FormatsNames is the list of supported thumbnail formats
+var FormatsNames = []string{
 	"small",
 	"medium",
 	"large",
@@ -62,6 +63,9 @@ func Worker(ctx *jobs.WorkerContext) error {
 	if img.Verb != "DELETED" && img.Doc.Trashed {
 		return nil
 	}
+	if img.OldDoc != nil && sameImg(&img.Doc, img.OldDoc) {
+		return nil
+	}
 
 	log := ctx.Logger()
 	log.WithField("nspace", "thumbnail").Debugf("%s %s", img.Verb, img.Doc.ID())
@@ -81,6 +85,20 @@ func Worker(ctx *jobs.WorkerContext) error {
 		return removeThumbnails(i, &img.Doc)
 	}
 	return fmt.Errorf("Unknown type %s for image event", img.Verb)
+}
+
+func sameImg(doc, old *vfs.FileDoc) bool {
+	// XXX It is needed for a file that has just been uploaded. The first
+	// revision will have the size and md5sum, but is marked as trashed,
+	// and we have to wait for the second revision to have the file to generate
+	// the thumbnails
+	if doc.Trashed != old.Trashed {
+		return false
+	}
+	if doc.ByteSize != old.ByteSize {
+		return false
+	}
+	return bytes.Equal(doc.MD5Sum, old.MD5Sum)
 }
 
 type thumbnailMsg struct {
@@ -109,7 +127,7 @@ func WorkerCheck(ctx *jobs.WorkerContext) error {
 			return nil
 		}
 		allExists := true
-		for _, format := range formatsNames {
+		for _, format := range FormatsNames {
 			var exists bool
 			exists, err = fsThumb.ThumbExists(img, format)
 			if err != nil {
@@ -168,6 +186,16 @@ func calculateMetadata(fs vfs.VFS, img *vfs.FileDoc) (*vfs.Metadata, error) {
 }
 
 func generateThumbnails(ctx *jobs.WorkerContext, i *instance.Instance, img *vfs.FileDoc) error {
+	// Do not try to generate thumbnails for images that weight more than 100MB
+	// (or 5MB for PSDs)
+	var limit int64 = 100 * 1024 * 1024
+	if img.Mime == "image/vnd.adobe.photoshop" {
+		limit = 5 * 1024 * 1024
+	}
+	if img.ByteSize > limit {
+		return nil
+	}
+
 	fs := i.ThumbsFS()
 	var in io.Reader
 	in, err := i.VFS().OpenFile(img)
@@ -273,5 +301,5 @@ func generateThumb(ctx *jobs.WorkerContext, in io.Reader, out io.Writer, fileID 
 }
 
 func removeThumbnails(i *instance.Instance, img *vfs.FileDoc) error {
-	return i.ThumbsFS().RemoveThumbs(img, formatsNames)
+	return i.ThumbsFS().RemoveThumbs(img, FormatsNames)
 }

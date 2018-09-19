@@ -68,6 +68,26 @@ An application object contains the following fields:
 * `editor`: the application editor name
 * `versions`: an object containing all the channels versions
 * `latest_version`: the latest available version
+* `maintenance_activated`: boolean, true when the maintenance mode is activated on the application
+* `maintenance_options`: present only if `maintenance_activated` is true, object with the following fields:
+  - `flag_infra_maintenance`: bool, true iff the maintenance is internal to the cozy infrastructure
+  - `flag_short_maintenance`: bool, true iff the maintenance is a short maintenance, waiting for a correction on our side
+  - `flag_disallow_manual_exec`: bool, true iff the maintenance will disallow the execution on the application, even when manually executed
+  - `messages`: a list of localized messages containing a short and long information messages explaining the maintenance state
+* `label`: integer for a confidence grade from 0 to 5 (A to F), labelling the
+  application from a user privacy standpoint. It is calculated from the
+  `data_usage_commitment` and `data_usage_commitment_by` fields.
+* `data_usage_commitment`: specify a technical commitment from the
+  application editor:
+  - `user_ciphered`: technical commitment that the user's data is encrypted
+    and can only be known by him.
+  - `user_reserved`: commitment that the data is only used for the user, to
+    directly offer its service.
+  - `none`: no commitment
+* `data_usage_commitment_by`: specify what entity is taking the commitment:
+  - `cozy`: the commitment is taken by cozy
+  - `editor`: the commitment is taken by the application's editor
+  - `none`: no commitment is taken
 
 Example:
 
@@ -119,6 +139,22 @@ Example:
   "sha256": "466aa0815926fdbf33fda523af2b9bf34520906ffbb9bf512ddf20df2992a46f",
   "manifest": {
     /* ... */
+  },
+  "maintenance_activated": true,
+  "maintenance_options": {
+      "flag_infra_maintenance": true,
+      "flag_short_maintenance": false,
+      "flag_disallow_manual_exec": true,
+      "messages": {
+        "en": {
+          "long_message": "The app is currently in maintenance because of ....",
+          "short_message": "The app is currently in maintenance"
+        },
+        "fr": {
+          "long_message": "L'application est en cours de maintenance à cause de ...",
+          "short_message": "L'application est en cours de maintenance"
+        }
+      }
   }
 }
 ```
@@ -505,6 +541,46 @@ Content-Type: application/json
     /* ... */
   }
 }
+```
+
+### GET /registry/maintenance
+
+Get the list of applications with maintenance mode activated.
+
+#### Request
+
+```http
+GET /registry/maintenance HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+[
+  {
+    "slug": "drive",
+    "type": "webapp",
+    "version": "3.1.1",
+    "url": "http://.../3.1.1",
+    "sha256": "466aa0815926fdbf33fda523af2b9bf34520906ffbb9bf512ddf20df2992a46f",
+    "size": "1000",
+    "created_at": "2017-07-05T07:54:40.982Z",
+    "manifest": {
+      /* ... */
+    },
+    "maintenance_activated": true,
+    "maintenance_options": {
+        "flag_infra_maintenance": true,
+        "flag_short_maintenance": false,
+        "flag_disallow_manual_exec": true
+    }
+  }
+]
 ```
 
 ## Attaching a cozy-stack to a registry or a list of registries

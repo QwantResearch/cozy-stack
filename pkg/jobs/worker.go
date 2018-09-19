@@ -10,15 +10,17 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/metrics"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 )
 
 var (
 	defaultConcurrency  = runtime.NumCPU()
-	defaultMaxExecCount = 3
+	defaultMaxExecCount = 1
 	defaultRetryDelay   = 60 * time.Millisecond
 	defaultTimeout      = 10 * time.Second
 )
@@ -40,6 +42,11 @@ type (
 	// execution of the WorkerFunc.
 	WorkerCommit func(ctx *WorkerContext, errjob error) error
 
+	// WorkerBeforeHook is an optional method that is always called before the
+	// job is being pushed into the queue. It can be useful to skip the job
+	// beforehand.
+	WorkerBeforeHook func(req *JobRequest) (bool, error)
+
 	// WorkerConfig is the configuration parameter of a worker defined by the job
 	// system. It contains parameters of the worker along with the worker main
 	// function that perform the work against a job's message.
@@ -49,8 +56,10 @@ type (
 		WorkerFunc   WorkerFunc
 		WorkerCommit WorkerCommit
 		WorkerType   string
+		BeforeHook   WorkerBeforeHook
 		Concurrency  int
 		MaxExecCount int
+		AdminOnly    bool
 		Timeout      time.Duration
 		RetryDelay   time.Duration
 	}
@@ -100,6 +109,16 @@ func NewWorkerContext(workerID string, job *Job) *WorkerContext {
 		WithField("job_id", job.ID()).
 		WithField("worker_id", workerID).
 		WithField("nspace", "jobs")
+
+	if job.ForwardLogs {
+		// we need to clone the underlying logger in order to add a specific hook
+		// only on this logger.
+		loggerClone := logger.Clone(log.Logger)
+		loggerClone.AddHook(realtime.LogHook(job, realtime.GetHub(),
+			consts.Jobs, job.ID()))
+		log.Logger = loggerClone
+	}
+
 	return &WorkerContext{
 		Context: ctx,
 		job:     job,
@@ -335,7 +354,7 @@ func (t *task) run() (err error) {
 	defer func() {
 		if t.conf.WorkerCommit != nil {
 			if errc := t.conf.WorkerCommit(t.ctx, err); errc != nil {
-				t.ctx.Logger().Warnf("Error while commiting job: %s",
+				t.ctx.Logger().Warnf("Error while committing job: %s",
 					errc.Error())
 			}
 		}

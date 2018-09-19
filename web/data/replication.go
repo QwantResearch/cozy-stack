@@ -24,7 +24,7 @@ func getDesignDoc(c echo.Context) error {
 	docid := c.Param("designdocid")
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -41,7 +41,7 @@ func getLocalDoc(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 	docid := c.Param("docid")
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -56,7 +56,7 @@ func setLocalDoc(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 	docid := c.Param("docid")
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -70,7 +70,7 @@ func setLocalDoc(c echo.Context) error {
 func bulkGet(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -84,7 +84,7 @@ func bulkGet(c echo.Context) error {
 func bulkDocs(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.POST, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.POST, doctype); err != nil {
 		return err
 	}
 
@@ -113,7 +113,7 @@ func bulkDocs(c echo.Context) error {
 func createDB(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.POST, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.POST, doctype); err != nil {
 		return err
 	}
 
@@ -127,7 +127,7 @@ func createDB(c echo.Context) error {
 func fullCommit(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -141,7 +141,7 @@ func fullCommit(c echo.Context) error {
 func revsDiff(c echo.Context) error {
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -160,7 +160,7 @@ var allowedChangesParams = map[string]bool{
 	"timeout":      true,
 	"include_docs": true,
 	"heartbeat":    true, // Pouchdb sends heartbeet even for non-continuous
-	"_nonce":       true, // Pouchdb sends a request hash to avoid agressive caching by some browsers
+	"_nonce":       true, // Pouchdb sends a request hash to avoid aggressive caching by some browsers
 	"seq_interval": true,
 }
 
@@ -171,25 +171,25 @@ func changesFeed(c echo.Context) error {
 	// Drop a clear error for parameters not supported by stack
 	for key := range c.QueryParams() {
 		if !allowedChangesParams[key] {
-			return jsonapi.NewError(http.StatusBadRequest, "Unsupported query parameter '%s'", key)
+			return jsonapi.Errorf(http.StatusBadRequest, "Unsupported query parameter '%s'", key)
 		}
 	}
 
 	feed, err := couchdb.ValidChangesMode(c.QueryParam("feed"))
 	if err != nil {
-		return jsonapi.NewError(http.StatusBadRequest, err)
+		return jsonapi.Errorf(http.StatusBadRequest, "%s", err)
 	}
 
 	feedStyle, err := couchdb.ValidChangesStyle(c.QueryParam("style"))
 	if err != nil {
-		return jsonapi.NewError(http.StatusBadRequest, err)
+		return jsonapi.Errorf(http.StatusBadRequest, "%s", err)
 	}
 
 	limitString := c.QueryParam("limit")
 	limit := 0
 	if limitString != "" {
 		if limit, err = strconv.Atoi(limitString); err != nil {
-			return jsonapi.NewError(http.StatusBadRequest, "Invalid limit value '%s': %s", limitString, err.Error())
+			return jsonapi.Errorf(http.StatusBadRequest, "Invalid limit value '%s': %s", limitString, err.Error())
 		}
 	}
 
@@ -197,7 +197,7 @@ func changesFeed(c echo.Context) error {
 	seqInterval := 0
 	if seqIntervalString != "" {
 		if seqInterval, err = strconv.Atoi(seqIntervalString); err != nil {
-			return jsonapi.NewError(http.StatusBadRequest, "Invalid seq_interval value '%s': %s", seqIntervalString, err.Error())
+			return jsonapi.Errorf(http.StatusBadRequest, "Invalid seq_interval value '%s': %s", seqIntervalString, err.Error())
 		}
 	}
 
@@ -207,7 +207,7 @@ func changesFeed(c echo.Context) error {
 		return err
 	}
 
-	if err = permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err = middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -232,7 +232,7 @@ func dbStatus(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	doctype := c.Get("doctype").(string)
 
-	if err := permissions.AllowWholeType(c, permissions.GET, doctype); err != nil {
+	if err := middlewares.AllowWholeType(c, permissions.GET, doctype); err != nil {
 		return err
 	}
 
@@ -255,7 +255,7 @@ func replicationRoutes(group *echo.Group) {
 	group.GET("/", dbStatus)
 	group.GET("/_design/:designdocid", getDesignDoc)
 	group.GET("/_changes", changesFeed)
-	// POST=GET see http://docs.couchdb.org/en/2.1.0/api/database/changes.html#post--db-_changes)
+	// POST=GET see http://docs.couchdb.org/en/stable/api/database/changes.html#post--db-_changes)
 	group.POST("/_changes", changesFeed)
 
 	group.POST("/_ensure_full_commit", fullCommit)

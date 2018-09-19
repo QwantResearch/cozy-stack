@@ -9,7 +9,6 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
-	"github.com/cozy/cozy-stack/pkg/utils"
 	multierror "github.com/hashicorp/go-multierror"
 )
 
@@ -18,6 +17,7 @@ type (
 	memQueue struct {
 		MaxCapacity int
 		Jobs        chan *Job
+		closed      chan struct{}
 
 		list *list.List
 		run  bool
@@ -30,15 +30,15 @@ type (
 		workers      []*Worker
 		workersTypes []string
 		running      uint32
-		closed       chan struct{}
 	}
 )
 
 // newMemQueue creates and a new in-memory queue.
 func newMemQueue(workerType string) *memQueue {
 	return &memQueue{
-		list: list.New(),
-		Jobs: make(chan *Job),
+		list:   list.New(),
+		Jobs:   make(chan *Job),
+		closed: make(chan struct{}),
 	}
 }
 
@@ -58,15 +58,29 @@ func (q *memQueue) send() {
 	for {
 		q.jmu.Lock()
 		e := q.list.Front()
-		if e == nil {
+		if e == nil || !q.run {
 			q.run = false
 			q.jmu.Unlock()
 			return
 		}
 		q.list.Remove(e)
 		q.jmu.Unlock()
-		q.Jobs <- e.Value.(*Job)
+		select {
+		case <-q.closed:
+			return
+		case q.Jobs <- e.Value.(*Job):
+		}
 	}
+}
+
+func (q *memQueue) close() {
+	q.jmu.Lock()
+	defer q.jmu.Unlock()
+	if !q.run {
+		return
+	}
+	q.run = false
+	go func() { q.closed <- struct{}{} }()
 }
 
 // Len returns the length of the queue
@@ -83,7 +97,6 @@ func (q *memQueue) Len() int {
 func NewMemBroker() Broker {
 	return &memBroker{
 		queues: make(map[string]*memQueue),
-		closed: make(chan struct{}),
 	}
 }
 
@@ -127,7 +140,13 @@ func (b *memBroker) ShutdownWorkers(ctx context.Context) error {
 	if len(b.workers) == 0 {
 		return nil
 	}
+
 	fmt.Print("  shutting down in-memory broker...")
+
+	for _, q := range b.queues {
+		q.close()
+	}
+
 	errs := make(chan error)
 	for _, w := range b.workers {
 		go func(w *Worker) { errs <- w.Shutdown(ctx) }(w)
@@ -138,6 +157,7 @@ func (b *memBroker) ShutdownWorkers(ctx context.Context) error {
 			errm = multierror.Append(errm, err)
 		}
 	}
+
 	if errm != nil {
 		fmt.Println("failed:", errm)
 	} else {
@@ -152,18 +172,32 @@ func (b *memBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error)
 	if atomic.LoadUint32(&b.running) == 0 {
 		return nil, ErrClosed
 	}
+
 	workerType := req.WorkerType
-	if !utils.IsInArray(req.WorkerType, b.workersTypes) {
+	var worker *Worker
+	for _, w := range b.workers {
+		if w.Type == workerType {
+			worker = w
+			break
+		}
+	}
+	if worker == nil {
 		return nil, ErrUnknownWorker
 	}
-	q, ok := b.queues[workerType]
-	if !ok {
+	if worker.Conf.AdminOnly && !req.Admin {
 		return nil, ErrUnknownWorker
 	}
+	if worker.Conf.BeforeHook != nil {
+		if ok, err := worker.Conf.BeforeHook(req); !ok || err != nil {
+			return nil, err
+		}
+	}
+
 	job := NewJob(db, req)
 	if err := job.Create(); err != nil {
 		return nil, err
 	}
+	q := b.queues[workerType]
 	if err := q.Enqueue(job); err != nil {
 		return nil, err
 	}

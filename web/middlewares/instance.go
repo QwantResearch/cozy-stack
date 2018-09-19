@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/cozy/cozy-stack/pkg/instance"
+	"github.com/cozy/cozy-stack/pkg/permissions"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	"github.com/cozy/echo"
 )
@@ -29,18 +30,22 @@ func NeedInstance(next echo.HandlerFunc) echo.HandlerFunc {
 			errHTTP.Inner = err
 			return errHTTP
 		}
-		c.Set("instance", i)
+		c.Set("instance", i.WithContextualDomain(c.Request().Host))
 		return next(c)
 	}
 }
 
-// CheckInstanceTOS is a middleware that blocks the routing access if the term-
-// of-services have not been signed and have reach its deadline.
-func CheckInstanceTOS(next echo.HandlerFunc) echo.HandlerFunc {
+// CheckInstanceBlocked is a middleware that blocks the routing access (for
+// instance if the term- of-services have not been signed and have reach its
+// deadline)
+func CheckInstanceBlocked(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		i := GetInstance(c)
-		_, deadline := i.CheckTOSSigned()
-		if deadline == instance.TOSBlocked {
+		pdoc, err := GetPermission(c)
+		if err == nil && pdoc.Type == permissions.TypeCLI {
+			return next(c)
+		}
+		if i.CheckInstanceBlocked() {
 			contentType := AcceptedContentType(c)
 			switch contentType {
 			case jsonapi.ContentType, echo.MIMEApplicationJSON:

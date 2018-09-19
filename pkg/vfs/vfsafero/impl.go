@@ -15,6 +15,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/lock"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/magic"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/vfs"
@@ -250,7 +251,6 @@ func (afs *aferoVFS) CreateFile(newdoc, olddoc *vfs.FileDoc) (vfs.File, error) {
 		newdoc:  newdoc,
 		olddoc:  olddoc,
 		tmppath: tmppath,
-		newpath: newpath,
 		maxsize: maxsize,
 		capsize: capsize,
 
@@ -692,7 +692,6 @@ type aferoFileCreation struct {
 	afs     *aferoVFS          // parent vfs
 	newdoc  *vfs.FileDoc       // new document
 	olddoc  *vfs.FileDoc       // old document
-	newpath string             // file new path
 	tmppath string             // temporary file path for uploading a new version of this file
 	maxsize int64              // maximum size allowed for the file
 	capsize int64              // size cap from which we send a notification to the user
@@ -743,19 +742,22 @@ func (f *aferoFileCreation) Write(p []byte) (int, error) {
 }
 
 func (f *aferoFileCreation) Close() (err error) {
+	var newpath string
 	defer func() {
 		if err == nil {
 			if f.olddoc != nil {
 				// move the temporary file to its final location
-				f.afs.fs.Rename(f.tmppath, f.newpath) // #nosec
+				if errf := f.afs.fs.Rename(f.tmppath, newpath); errf != nil {
+					logger.WithNamespace("vfsafero").Warnf("Error on close file: %s", errf)
+				}
 			}
 			if f.capsize > 0 && f.size >= f.capsize {
 				vfs.PushDiskQuotaAlert(f.afs, true)
 			}
 		} else if err != nil {
-			// remove the temporary file if an error occured
+			// remove the temporary file if an error occurred
 			f.afs.fs.Remove(f.tmppath) // #nosec
-			// If an error has occured that is not due to the index update, we should
+			// If an error has occurred that is not due to the index update, we should
 			// delete the file from the index.
 			if f.olddoc == nil {
 				if _, isCouchErr := couchdb.IsCouchError(err); !isCouchErr {
@@ -775,6 +777,9 @@ func (f *aferoFileCreation) Close() (err error) {
 	}
 
 	newdoc, olddoc, written := f.newdoc, f.olddoc, f.w
+	if olddoc == nil {
+		olddoc = newdoc.Clone().(*vfs.FileDoc)
+	}
 
 	if f.meta != nil {
 		if errc := (*f.meta).Close(); errc == nil {
@@ -806,17 +811,23 @@ func (f *aferoFileCreation) Close() (err error) {
 	// The document is already added to the index when closing the file creation
 	// handler. When updating the content of the document with the final
 	// informations (size, md5, ...) we can reuse the same document as olddoc.
-	if olddoc == nil || !olddoc.Trashed {
+	if f.olddoc == nil || !f.olddoc.Trashed {
 		newdoc.Trashed = false
-	}
-	if olddoc == nil {
-		olddoc = newdoc.Clone().(*vfs.FileDoc)
 	}
 	lockerr := f.afs.mu.Lock()
 	if lockerr != nil {
 		return lockerr
 	}
 	defer f.afs.mu.Unlock()
+
+	newpath, err = f.afs.Indexer.FilePath(newdoc)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(newpath, vfs.TrashDirName+"/") {
+		return vfs.ErrParentInTrash
+	}
+
 	return f.afs.Indexer.UpdateFileDoc(olddoc, newdoc)
 }
 

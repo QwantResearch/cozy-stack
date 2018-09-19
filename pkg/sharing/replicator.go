@@ -127,7 +127,7 @@ func (s *Sharing) retryWorker(inst *instance.Instance, worker string, errors int
 }
 
 // ReplicateTo starts a replicator on this sharing to the given member.
-// http://docs.couchdb.org/en/2.1.1/replication/protocol.html
+// http://docs.couchdb.org/en/stable/replication/protocol.html
 // https://github.com/pouchdb/pouchdb/blob/master/packages/node_modules/pouchdb-replication/src/replicate.js
 // TODO pouch use the pending property of changes for its replicator
 // https://github.com/pouchdb/pouchdb/blob/master/packages/node_modules/pouchdb-replication/src/replicate.js#L298-L301
@@ -227,6 +227,29 @@ func (s *Sharing) UpdateLastSequenceNumber(inst *instance.Instance, m *Member, w
 	return couchdb.PutLocal(inst, consts.Shared, id+"/"+worker, result)
 }
 
+// ClearLastSequenceNumbers removes the last sequence numbers for a member
+func (s *Sharing) ClearLastSequenceNumbers(inst *instance.Instance, m *Member) error {
+	errr := s.clearLastSequenceNumber(inst, m, "replicator")
+	erru := s.clearLastSequenceNumber(inst, m, "upload")
+	if errr != nil {
+		return errr
+	}
+	return erru
+}
+
+// clearLastSequenceNumber removes a last sequence number for a member on a given worker
+func (s *Sharing) clearLastSequenceNumber(inst *instance.Instance, m *Member, worker string) error {
+	id, err := s.replicationID(m)
+	if err != nil {
+		return err
+	}
+	err = couchdb.DeleteLocal(inst, consts.Shared, id+"/"+worker)
+	if couchdb.IsNotFoundError(err) {
+		return nil
+	}
+	return err
+}
+
 // replicationID gives an identifier for this replicator
 func (s *Sharing) replicationID(m *Member) (string, error) {
 	for i := range s.Members {
@@ -283,7 +306,7 @@ type changesResponse struct {
 }
 
 // callChangesFeed fetches the last changes from the changes feed
-// http://docs.couchdb.org/en/2.1.1/api/database/changes.html
+// http://docs.couchdb.org/en/stable/api/database/changes.html
 // TODO add a filter on the sharing
 func (s *Sharing) callChangesFeed(inst *instance.Instance, since string) (*changesResponse, error) {
 	response, err := couchdb.GetChanges(inst, &couchdb.ChangesRequest{
@@ -353,7 +376,7 @@ func transformChangesInMissings(changes *Changes) *Missings {
 
 // callRevsDiff asks the other cozy to compute the _revs_diff.
 // This function does the ID transformation for files in both ways.
-// http://docs.couchdb.org/en/2.1.1/api/database/misc.html#db-revs-diff
+// http://docs.couchdb.org/en/stable/api/database/misc.html#db-revs-diff
 func (s *Sharing) callRevsDiff(inst *instance.Instance, m *Member, creds *Credentials, changes *Changes) (*Missings, error) {
 	u, err := url.Parse(m.Instance)
 	if err != nil {
@@ -391,19 +414,14 @@ func (s *Sharing) callRevsDiff(inst *instance.Instance, m *Member, creds *Creden
 	}
 	var res *http.Response
 	res, err = request.Req(opts)
-	if err != nil {
-		return nil, err
-	}
-	if res.StatusCode/100 == 5 {
-		res.Body.Close()
-		return nil, ErrInternalServerError
-	}
-	if res.StatusCode/100 == 4 {
-		res.Body.Close()
+	if res != nil && res.StatusCode/100 == 4 {
 		res, err = RefreshToken(inst, s, m, creds, opts, body)
-		if err != nil {
-			return nil, err
+	}
+	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return nil, ErrInternalServerError
 		}
+		return nil, err
 	}
 	defer res.Body.Close()
 
@@ -509,7 +527,7 @@ func (s *Sharing) getMissingDocs(inst *instance.Instance, missings *Missings, ch
 
 // sendBulkDocs takes a bulk of documents and send them to the other cozy.
 // This function does the id and dir_id transformation before sending files.
-// http://docs.couchdb.org/en/2.1.1/api/database/bulk-api.html#db-bulk-docs
+// http://docs.couchdb.org/en/stable/api/database/bulk-api.html#db-bulk-docs
 // https://wiki.apache.org/couchdb/HTTP_Bulk_Document_API#Posting_Existing_Revisions
 // https://gist.github.com/nono/42aee18de6314a621f9126f284e303bb
 func (s *Sharing) sendBulkDocs(inst *instance.Instance, m *Member, creds *Credentials, docs *DocsByDoctype, ruleIndexes map[string]int) error {
@@ -543,19 +561,16 @@ func (s *Sharing) sendBulkDocs(inst *instance.Instance, m *Member, creds *Creden
 		Body: bytes.NewReader(body),
 	}
 	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, m, creds, opts, body)
+	}
 	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return ErrInternalServerError
+		}
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode/100 == 5 {
-		return ErrInternalServerError
-	}
-	if res.StatusCode/100 == 4 {
-		if res, err = RefreshToken(inst, s, m, creds, opts, body); err != nil {
-			return err
-		}
-		res.Body.Close()
-	}
 	return nil
 }
 

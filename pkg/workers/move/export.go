@@ -109,6 +109,9 @@ func (e *ExportDoc) Clone() couchdb.Doc {
 	clone.PartsCursors = make([]string, len(e.PartsCursors))
 	copy(clone.PartsCursors, e.PartsCursors)
 
+	clone.WithDoctypes = make([]string, len(e.WithDoctypes))
+	copy(clone.WithDoctypes, e.WithDoctypes)
+
 	return &clone
 }
 
@@ -175,12 +178,6 @@ func GetExports(domain string) ([]*ExportDoc, error) {
 		Limit: 256,
 	}
 	err := couchdb.FindDocs(couchdb.GlobalDB, consts.Exports, req, &docs)
-	if couchdb.IsNoUsableIndexError(err) {
-		if err = couchdb.DefineIndexes(couchdb.GlobalDB, consts.GlobalIndexes); err != nil {
-			return nil, err
-		}
-		err = couchdb.FindDocs(couchdb.GlobalDB, consts.Exports, req, &docs)
-	}
 	if err != nil && !couchdb.IsNoDatabaseError(err) {
 		return nil, err
 	}
@@ -515,7 +512,7 @@ func Export(i *instance.Instance, opts ExportOptions, archiver Archiver) (export
 }
 
 // splitFilesIndex devides the index into equal size bucket of maximum size
-// `bucketSize`. Files can be splitted into multiple parts to accomodate the
+// `bucketSize`. Files can be splitted into multiple parts to accommodate the
 // bucket size, using a range. It is used to be able to download the files into
 // separate chunks.
 //

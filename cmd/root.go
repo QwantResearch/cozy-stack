@@ -29,6 +29,8 @@ import (
 // is stored relatively to the cozy-stack binary.
 const DefaultStorageDir = "storage"
 
+const defaultDevDomain = "cozy.tools:8080"
+
 var cfgFile string
 
 // ErrUsage is returned by the cmd.Usage() method
@@ -36,7 +38,7 @@ var ErrUsage = errors.New("Bad usage of command")
 
 // RootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
-	Use:   "cozy-stack",
+	Use:   "cozy-stack <command>",
 	Short: "cozy-stack is the main command",
 	Long: `Cozy is a platform that brings all your web services in the same private space.
 With it, your web apps and your devices can share data easily, providing you
@@ -246,11 +248,7 @@ func (e *endpoint) configure(prefix string, host string, port int) error {
 	if err := e.configureFromEnv(prefix); err != nil {
 		return err
 	}
-	if err := e.configureFromURL(); err != nil {
-		return err
-	}
-
-	return nil
+	return e.configureFromURL()
 }
 
 func (e *endpoint) getClient() (*http.Client, error) {
@@ -263,7 +261,7 @@ func (e *endpoint) getClient() (*http.Client, error) {
 	}, nil
 }
 
-func newClient(domain string, scopes ...string) *client.Client {
+func newClientSafe(domain string, scopes ...string) (*client.Client, error) {
 	// For the CLI client, we rely on the admin APIs to generate a CLI token.
 	// We may want in the future rely on OAuth to handle the permissions with
 	// more granularity.
@@ -275,18 +273,20 @@ func newClient(domain string, scopes ...string) *client.Client {
 		Scope:    scopes,
 	})
 	if err != nil {
-		errPrintfln("Could not generate access to domain %s", domain)
-		errPrintfln("%s", err)
-		os.Exit(1)
+		return nil, err
 	}
 
 	cfg := config.GetConfig()
 	e := endpoint{}
 	err = e.configure("COZY_HOST", cfg.Host, cfg.Port)
-	checkNoErr(err)
+	if err != nil {
+		return nil, err
+	}
 
 	h, err := e.getClient()
-	checkNoErr(err)
+	if err != nil {
+		return nil, err
+	}
 
 	u := e.URL
 
@@ -296,7 +296,17 @@ func newClient(domain string, scopes ...string) *client.Client {
 		Domain:     domain,
 		Client:     h,
 		Authorizer: &request.BearerAuthorizer{Token: token},
+	}, nil
+}
+
+func newClient(domain string, scopes ...string) *client.Client {
+	client, err := newClientSafe(domain, scopes...)
+	if err != nil {
+		errPrintfln("Could not generate access to domain %s", domain)
+		errPrintfln("%s", err)
+		os.Exit(1)
 	}
+	return client
 }
 
 func newAdminClient() *client.Client {

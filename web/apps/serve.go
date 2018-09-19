@@ -20,7 +20,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/sessions"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	"github.com/cozy/cozy-stack/web/permissions"
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/cozy/echo"
 )
@@ -49,9 +48,13 @@ func Serve(c echo.Context) error {
 		}
 	}
 
-	_, deadline := i.CheckTOSSigned()
-	if deadline == instance.TOSBlocked {
-		redirect, _ := i.ManagerURL(instance.ManagerTOSURL)
+	if i.CheckInstanceBlocked() {
+		var redirect string
+		if i.Blocked {
+			redirect, _ = i.ManagerURL(instance.ManagerBlockedURL)
+		} else {
+			redirect, _ = i.ManagerURL(instance.ManagerTOSURL)
+		}
 		return c.Redirect(http.StatusFound, redirect)
 	}
 
@@ -124,7 +127,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs apps.FileServer, app 
 
 	var needAuth bool
 	if len(i.RegisterToken) > 0 && file == route.Index {
-		if slug != consts.OnboardingSlug || !permissions.CheckRegisterToken(c, i) {
+		if slug != consts.OnboardingSlug || !middlewares.CheckRegisterToken(c, i) {
 			return c.Redirect(http.StatusFound, i.PageURL("/", nil))
 		}
 		needAuth = false
@@ -220,8 +223,9 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs apps.FileServer, app 
 	res.WriteHeader(http.StatusOK)
 	return tmpl.Execute(res, echo.Map{
 		"Token":         token,
-		"Domain":        i.Domain,
+		"Domain":        i.ContextualDomain(),
 		"Locale":        i.Locale,
+		"AppSlug":       app.Slug(),
 		"AppName":       app.Name,
 		"AppEditor":     app.Editor,
 		"AppNamePrefix": app.NamePrefix,
@@ -257,7 +261,7 @@ func deleteAppCookie(c echo.Context, i *instance.Instance, slug string) error {
 		Value:  "",
 		MaxAge: -1,
 		Path:   "/",
-		Domain: utils.StripPort(i.Domain),
+		Domain: utils.StripPort(i.ContextualDomain()),
 	})
 
 	redirect := *(c.Request().URL)
@@ -315,7 +319,7 @@ func init() {
 
 func cozyclientjs(i *instance.Instance) template.HTML {
 	buf := new(bytes.Buffer)
-	err := clientTemplate.Execute(buf, echo.Map{"Domain": i.Domain})
+	err := clientTemplate.Execute(buf, echo.Map{"Domain": i.ContextualDomain()})
 	if err != nil {
 		return template.HTML("")
 	}
@@ -325,7 +329,7 @@ func cozyclientjs(i *instance.Instance) template.HTML {
 func cozybar(i *instance.Instance, loggedIn bool) template.HTML {
 	buf := new(bytes.Buffer)
 	err := barTemplate.Execute(buf, echo.Map{
-		"Domain":   i.Domain,
+		"Domain":   i.ContextualDomain(),
 		"Warnings": i.Warnings(),
 		"LoggedIn": loggedIn,
 	})

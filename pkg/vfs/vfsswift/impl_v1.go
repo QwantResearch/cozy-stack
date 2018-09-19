@@ -22,6 +22,7 @@ import (
 )
 
 const swiftV1ContainerPrefix = "cozy-"
+const swiftV1DataContainerPrefix = "data-"
 
 const versionSuffix = "-version"
 const maxFileSize = 5 << (3 * 10) // 5 GiB
@@ -30,13 +31,14 @@ const dirContentType = "directory"
 type swiftVFS struct {
 	vfs.Indexer
 	vfs.DiskThresholder
-	c         *swift.Connection
-	domain    string
-	prefix    string
-	container string
-	version   string
-	mu        lock.ErrorRWLocker
-	log       *logrus.Entry
+	c             *swift.Connection
+	domain        string
+	prefix        string
+	container     string
+	version       string
+	dataContainer string
+	mu            lock.ErrorRWLocker
+	log           *logrus.Entry
 }
 
 // New returns a vfs.VFS instance associated with the specified indexer and the
@@ -46,13 +48,14 @@ func New(db prefixer.Prefixer, index vfs.Indexer, disk vfs.DiskThresholder, mu l
 		Indexer:         index,
 		DiskThresholder: disk,
 
-		c:         config.GetSwiftConnection(),
-		domain:    db.DomainName(),
-		prefix:    db.DBPrefix(),
-		container: swiftV1ContainerPrefix + db.DBPrefix(),
-		version:   swiftV1ContainerPrefix + db.DBPrefix() + versionSuffix,
-		mu:        mu,
-		log:       logger.WithDomain(db.DomainName()).WithField("nspace", "vfsswift"),
+		c:             config.GetSwiftConnection(),
+		domain:        db.DomainName(),
+		prefix:        db.DBPrefix(),
+		container:     swiftV1ContainerPrefix + db.DBPrefix(),
+		version:       swiftV1ContainerPrefix + db.DBPrefix() + versionSuffix,
+		dataContainer: swiftV1DataContainerPrefix + db.DBPrefix(),
+		mu:            mu,
+		log:           logger.WithDomain(db.DomainName()).WithField("nspace", "vfsswift"),
 	}, nil
 }
 
@@ -102,20 +105,35 @@ func (sfs *swiftVFS) InitFs() error {
 }
 
 func (sfs *swiftVFS) Delete() error {
-	err := sfs.deleteContainer(sfs.version)
-	if err != nil {
-		sfs.log.Errorf("Could not delete version container %s: %s",
-			sfs.version, err.Error())
-		return err
+	containerMeta := swift.Metadata{"to-be-deleted": "1"}.ContainerHeaders()
+	sfs.log.Infof("Marking containers %q, %q and %q as to-be-deleted",
+		sfs.container, sfs.version, sfs.dataContainer)
+	err1 := sfs.c.ContainerUpdate(sfs.container, containerMeta)
+	err2 := sfs.c.ContainerUpdate(sfs.dataContainer, containerMeta)
+	err3 := sfs.c.ContainerUpdate(sfs.version, containerMeta)
+	if err1 != nil {
+		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
+			sfs.container, err1)
 	}
-	err = sfs.deleteContainer(sfs.container)
-	if err != nil {
-		sfs.log.Errorf("Could not delete container %s: %s",
-			sfs.container, err.Error())
-		return err
+	if err2 != nil {
+		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
+			sfs.dataContainer, err2)
 	}
-	sfs.log.Infof("Deleted container %s", sfs.container)
-	return nil
+	if err3 != nil {
+		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
+			sfs.version, err3)
+	}
+	var errm error
+	if err := sfs.deleteContainer(sfs.container); err != nil {
+		errm = multierror.Append(errm, err)
+	}
+	if err := sfs.deleteContainer(sfs.dataContainer); err != nil {
+		errm = multierror.Append(errm, err)
+	}
+	if err := sfs.deleteContainer(sfs.version); err != nil {
+		errm = multierror.Append(errm, err)
+	}
+	return errm
 }
 
 func (sfs *swiftVFS) deleteContainer(container string) error {
@@ -154,7 +172,7 @@ func (sfs *swiftVFS) CreateDir(doc *vfs.DirDoc) error {
 	objName := doc.DirID + "/" + doc.DocName
 	f, err := sfs.c.ObjectCreate(sfs.container,
 		objName,
-		false,
+		true,
 		"",
 		dirContentType,
 		nil,
@@ -252,7 +270,7 @@ func (sfs *swiftVFS) CreateFile(newdoc, olddoc *vfs.FileDoc) (vfs.File, error) {
 	f, err := sfs.c.ObjectCreate(
 		sfs.container,
 		objName,
-		hash != "",
+		true,
 		hash,
 		newdoc.Mime,
 		nil,
@@ -600,7 +618,7 @@ func (sfs *swiftVFS) fsckPrune(logbook []*vfs.FsckLog, dryrun bool) {
 				}
 				_, err = sfs.c.ObjectCreate(sfs.container,
 					olddoc.DirID+"/"+olddoc.DocName,
-					false,
+					true,
 					"",
 					dirContentType,
 					nil,
@@ -800,7 +818,7 @@ func (f *swiftFileCreation) Close() (err error) {
 			// on the container and the old object should be restored.
 			f.fs.c.ObjectDelete(f.fs.container, f.name) // #nosec
 
-			// If an error has occured that is not due to the index update, we should
+			// If an error has occurred that is not due to the index update, we should
 			// delete the file from the index.
 			_, isCouchErr := couchdb.IsCouchError(err)
 			if !isCouchErr && f.olddoc == nil {
@@ -823,6 +841,10 @@ func (f *swiftFileCreation) Close() (err error) {
 	}
 
 	newdoc, olddoc, written := f.newdoc, f.olddoc, f.w
+	if olddoc == nil {
+		olddoc = newdoc.Clone().(*vfs.FileDoc)
+	}
+
 	if f.meta != nil {
 		if errc := (*f.meta).Close(); errc == nil {
 			newdoc.Metadata = (*f.meta).Result()
@@ -868,11 +890,8 @@ func (f *swiftFileCreation) Close() (err error) {
 	// The document is already added to the index when closing the file creation
 	// handler. When updating the content of the document with the final
 	// informations (size, md5, ...) we can reuse the same document as olddoc.
-	if olddoc == nil || !olddoc.Trashed {
+	if f.olddoc == nil || !f.olddoc.Trashed {
 		newdoc.Trashed = false
-	}
-	if olddoc == nil {
-		olddoc = newdoc.Clone().(*vfs.FileDoc)
 	}
 	lockerr := f.fs.mu.Lock()
 	if lockerr != nil {

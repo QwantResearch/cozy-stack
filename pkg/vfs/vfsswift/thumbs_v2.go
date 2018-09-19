@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/vfs"
 	"github.com/cozy/swift"
 )
@@ -18,8 +19,8 @@ var unixEpochZero = time.Time{}
 //
 // This version stores the thumbnails in the same container as the main data
 // container.
-func NewThumbsFsV2(c *swift.Connection, domain string) vfs.Thumbser {
-	return &thumbsV2{c: c, container: swiftV2ContainerPrefixData + domain}
+func NewThumbsFsV2(c *swift.Connection, db prefixer.Prefixer) vfs.Thumbser {
+	return &thumbsV2{c: c, container: swiftV2ContainerPrefixData + db.DBPrefix()}
 }
 
 type thumbsV2 struct {
@@ -55,10 +56,16 @@ func (t *thumbsV2) CreateThumb(img *vfs.FileDoc, format string) (vfs.ThumbFiler,
 	objMeta := swift.Metadata{
 		"file-md5": hex.EncodeToString(img.MD5Sum),
 	}
-	obj, err := t.c.ObjectCreate(t.container, name, false, "", img.Mime,
+	obj, err := t.c.ObjectCreate(t.container, name, true, "", img.Mime,
 		objMeta.ObjectHeaders())
 	if err != nil {
-		return nil, err
+		if _, _, errc := t.c.Container(t.container); errc == swift.ContainerNotFound {
+			if errc = t.c.ContainerCreate(t.container, nil); errc != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 	th := &thumb{
 		WriteCloser: obj,

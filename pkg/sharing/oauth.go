@@ -15,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/oauth"
 	"github.com/cozy/cozy-stack/pkg/permissions"
+	"github.com/cozy/cozy-stack/pkg/vfs"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 )
 
@@ -41,6 +42,7 @@ func (m *Member) CreateSharingRequest(inst *instance.Instance, s *Sharing, c *Cr
 			Status:     m.Status,
 			PublicName: m.PublicName,
 			Email:      m.Email,
+			ReadOnly:   m.ReadOnly,
 		}
 		// ... except for the sharer and the recipient of this request
 		if i == 0 || &s.Credentials[i-1] == c {
@@ -60,6 +62,7 @@ func (m *Member) CreateSharingRequest(inst *instance.Instance, s *Sharing, c *Cr
 			UpdatedAt:   s.UpdatedAt,
 			Rules:       rules,
 			Members:     members,
+			NbFiles:     s.countFiles(inst),
 		},
 		nil,
 		nil,
@@ -83,14 +86,66 @@ func (m *Member) CreateSharingRequest(inst *instance.Instance, s *Sharing, c *Cr
 		},
 		Body: bytes.NewReader(body),
 	})
+	if res != nil && res.StatusCode == http.StatusConflict {
+		return ErrAlreadyAccepted
+	}
 	if err != nil {
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return ErrRequestFailed
-	}
 	return nil
+}
+
+func clearAppInHost(host string) string {
+	knownDomain := false
+	for _, domain := range consts.KnownFlatDomains {
+		if strings.HasSuffix(host, domain) {
+			knownDomain = true
+			break
+		}
+	}
+	if !knownDomain {
+		return host
+	}
+	parts := strings.SplitN(host, ".", 2)
+	sub := parts[0]
+	domain := parts[1]
+	parts = strings.SplitN(sub, "-", 2)
+	return parts[0] + "." + domain
+}
+
+// countFiles returns the number of files that should be uploaded on the
+// initial synchronisation.
+func (s *Sharing) countFiles(inst *instance.Instance) int {
+	count := 0
+	for _, rule := range s.Rules {
+		if rule.DocType != consts.Files || rule.Local || len(rule.Values) == 0 {
+			continue
+		}
+		if rule.Selector == "" || rule.Selector == "id" {
+			for _, fileID := range rule.Values {
+				vfs.WalkByID(inst.VFS(), fileID, func(name string, dir *vfs.DirDoc, file *vfs.FileDoc, err error) error {
+					if err != nil {
+						return err
+					}
+					if file != nil {
+						count++
+					}
+					return nil
+				})
+			}
+		} else {
+			var resCount couchdb.ViewResponse
+			for _, val := range rule.Values {
+				reqCount := &couchdb.ViewRequest{Key: val, Reduce: true}
+				err := couchdb.ExecView(inst, consts.FilesReferencedByView, reqCount, &resCount)
+				if err == nil && len(resCount.Rows) > 0 {
+					count += int(resCount.Rows[0].Value.(float64))
+				}
+			}
+		}
+	}
+	return count
 }
 
 // RegisterCozyURL saves a new Cozy URL for a member
@@ -107,6 +162,7 @@ func (s *Sharing) RegisterCozyURL(inst *instance.Instance, m *Member, cozyURL st
 	if err != nil || u.Host == "" {
 		return ErrInvalidURL
 	}
+	u.Host = clearAppInHost(u.Host)
 	u.Path = ""
 	u.RawPath = ""
 	u.RawQuery = ""
@@ -119,6 +175,9 @@ func (s *Sharing) RegisterCozyURL(inst *instance.Instance, m *Member, cozyURL st
 	}
 	if err = m.CreateSharingRequest(inst, s, creds, u); err != nil {
 		inst.Logger().WithField("nspace", "sharing").Warnf("Error on sharing request: %s", err)
+		if err == ErrAlreadyAccepted {
+			return err
+		}
 		return ErrRequestFailed
 	}
 	return couchdb.UpdateDoc(inst, s)
@@ -285,15 +344,12 @@ func (s *Sharing) SendAnswer(inst *instance.Instance, state string) error {
 		return err
 	}
 	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return ErrRequestFailed
-	}
 
 	for i, m := range s.Members {
 		if i > 0 && m.Instance != "" {
 			if m.Status == MemberStatusMailNotSent ||
 				m.Status == MemberStatusPendingInvitation {
-				m.Status = MemberStatusReady
+				s.Members[i].Status = MemberStatusReady
 			}
 		}
 	}
@@ -341,7 +397,7 @@ func (s *Sharing) ProcessAnswer(inst *instance.Instance, creds *APICredentials) 
 			var verb permissions.VerbSet
 			// In case of read-only, the recipient only needs read access on the
 			// sharing, e.g. to notify the sharer of a revocation
-			if s.ReadOnly() {
+			if s.ReadOnly() || s.Members[i+1].ReadOnly {
 				verb = permissions.Verbs(permissions.GET)
 			} else {
 				verb = permissions.ALL
@@ -375,15 +431,10 @@ func RefreshToken(inst *instance.Instance, s *Sharing, m *Member, creds *Credent
 	}
 	res, err := request.Req(opts)
 	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return nil, ErrInternalServerError
+		}
 		return nil, err
-	}
-	if res.StatusCode/100 == 5 {
-		res.Body.Close()
-		return nil, ErrInternalServerError
-	}
-	if res.StatusCode/100 != 2 {
-		res.Body.Close()
-		return nil, ErrClientError
 	}
 	return res, nil
 }

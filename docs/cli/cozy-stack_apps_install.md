@@ -8,13 +8,13 @@ from the given source URL.
 [Some schemes](../../docs/apps.md#sources) are allowed as `[sourceurl]`.
 
 ```
-cozy-stack apps install [slug] [sourceurl] [flags]
+cozy-stack apps install <slug> [sourceurl] [flags]
 ```
 
 ### Examples
 
 ```
-$ cozy-stack apps install --domain cozy.tools:8080 drive 'git://github.com/cozy/cozy-drive.git#latest-drive'
+$ cozy-stack apps install --domain cozy.tools:8080 drive registry://drive/stable
 ```
 
 ### Options

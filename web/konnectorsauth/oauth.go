@@ -7,13 +7,13 @@ import (
 	"net/url"
 
 	"github.com/cozy/cozy-stack/pkg/accounts"
+	"github.com/cozy/cozy-stack/pkg/apps"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/permissions"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	webperm "github.com/cozy/cozy-stack/web/permissions"
 	"github.com/cozy/echo"
 )
 
@@ -58,9 +58,14 @@ func start(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, url)
 }
 
-func redirectToDataCollect(c echo.Context, account *accounts.Account, clientState string) error {
+func redirectToApp(c echo.Context, account *accounts.Account, clientState string) error {
 	instance := middlewares.GetInstance(c)
-	u := instance.SubDomain(consts.CollectSlug)
+	slug := consts.HomeSlug
+	man, err := apps.GetWebappBySlug(instance, slug)
+	if err != nil || man == nil {
+		slug = consts.CollectSlug
+	}
+	u := instance.SubDomain(slug)
 	vv := &url.Values{}
 	vv.Add("account", account.ID())
 	if clientState != "" {
@@ -141,8 +146,8 @@ func redirect(c echo.Context) error {
 		return err
 	}
 
-	c.Set("instance", i)
-	return redirectToDataCollect(c, account, clientState)
+	c.Set("instance", i.WithContextualDomain(c.Request().Host))
+	return redirectToApp(c, account, clientState)
 }
 
 // refresh is an internal route used by konnectors to refresh accounts
@@ -156,7 +161,7 @@ func refresh(c echo.Context) error {
 		return err
 	}
 
-	if err := webperm.Allow(c, permissions.GET, &account); err != nil {
+	if err := middlewares.Allow(c, permissions.GET, &account); err != nil {
 		return err
 	}
 

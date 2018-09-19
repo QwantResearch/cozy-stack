@@ -119,7 +119,6 @@ type Config struct {
 	Notifications Notifications
 	Logger        logger.Options
 
-	Cache                       RedisConfig
 	Lock                        RedisConfig
 	SessionStorage              RedisConfig
 	DownloadStorage             RedisConfig
@@ -169,6 +168,7 @@ type CouchDB struct {
 type Jobs struct {
 	RedisConfig
 	NoWorkers             bool
+	WhiteList             bool
 	Workers               []Worker
 	ImageMagickConvertCmd string
 	// XXX for retro-compatibility
@@ -466,10 +466,6 @@ func UseViper(v *viper.Viper) error {
 	if err != nil {
 		return err
 	}
-	cacheRedis, err := GetRedisConfig(v, redisOptions, "cache", "url")
-	if err != nil {
-		return err
-	}
 	lockRedis, err := GetRedisConfig(v, redisOptions, "lock", "url")
 	if err != nil {
 		return err
@@ -505,13 +501,16 @@ func UseViper(v *viper.Viper) error {
 		ImageMagickConvertCmd: v.GetString("jobs.imagemagick_convert_cmd"),
 	}
 	{
+		isWhiteList := v.GetBool("jobs.whitelist")
+		if isWhiteList {
+			jobs.WhiteList = true
+		}
 		if nbWorkers := v.GetInt("jobs.workers"); nbWorkers > 0 {
 			jobs.NbWorkers = nbWorkers
 		} else if ws := v.GetString("jobs.workers"); ws == "false" || ws == "none" || ws == "0" {
 			jobs.NoWorkers = true
 		} else if workersMap := v.GetStringMap("jobs.workers"); len(workersMap) > 0 {
 			workers := make([]Worker, 0, len(workersMap))
-
 			for workerType, mapInterface := range workersMap {
 				w := Worker{WorkerType: workerType}
 
@@ -565,13 +564,13 @@ func UseViper(v *viper.Viper) error {
 		AdminPort:           v.GetInt("admin.port"),
 		AdminSecretFileName: adminSecretFile,
 
-		Subdomains:  subdomains,
-		Assets:      v.GetString("assets"),
-		Doctypes:    v.GetString("doctypes"),
-		NoReplyAddr: v.GetString("mail.noreply_address"),
-		NoReplyName: v.GetString("mail.noreply_name"),
-		Hooks:       v.GetString("hooks"),
-		GeoDB:       v.GetString("geodb"),
+		Subdomains:            subdomains,
+		Assets:                v.GetString("assets"),
+		Doctypes:              v.GetString("doctypes"),
+		NoReplyAddr:           v.GetString("mail.noreply_address"),
+		NoReplyName:           v.GetString("mail.noreply_name"),
+		Hooks:                 v.GetString("hooks"),
+		GeoDB:                 v.GetString("geodb"),
 		PasswordResetInterval: v.GetDuration("password_reset_interval"),
 
 		RemoteAssets: v.GetStringMapString("remote_assets"),
@@ -604,7 +603,6 @@ func UseViper(v *viper.Viper) error {
 			IOSKeyID:               v.GetString("notifications.ios_key_id"),
 			IOSTeamID:              v.GetString("notifications.ios_team_id"),
 		},
-		Cache:                       cacheRedis,
 		Lock:                        lockRedis,
 		SessionStorage:              sessionsRedis,
 		DownloadStorage:             downloadRedis,
@@ -627,6 +625,10 @@ func UseViper(v *viper.Viper) error {
 		Registries: regs,
 
 		CSPWhitelist: v.GetStringMapString("csp_whitelist"),
+	}
+
+	if IsDevRelease() && v.GetBool("disable_csp") {
+		config.CSPDisabled = true
 	}
 
 	return logger.Init(config.Logger)
@@ -727,7 +729,6 @@ func createTestViper() *viper.Viper {
 	v.SetDefault("subdomains", "nested")
 	v.SetDefault("fs.url", "mem://test")
 	v.SetDefault("couchdb.url", "http://localhost:5984/")
-	v.SetDefault("cache.url", "redis://localhost:6379/0")
 	v.SetDefault("log.level", "info")
 	applyDefaults(v)
 	return v

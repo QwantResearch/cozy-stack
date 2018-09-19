@@ -37,6 +37,7 @@ type Session struct {
 	DocRev    string             `json:"_rev,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`
 	LastSeen  time.Time          `json:"last_seen"`
+	LongRun   bool               `json:"long_run"`
 }
 
 // DocType implements couchdb.Doc
@@ -73,35 +74,29 @@ func (s *Session) OlderThan(t time.Duration) bool {
 }
 
 // New creates a session in couchdb for the given instance
-func New(i *instance.Instance) (*Session, error) {
+func New(i *instance.Instance, longRun bool) (*Session, error) {
 	now := time.Now()
 	s := &Session{
 		Instance:  i,
 		LastSeen:  now,
 		CreatedAt: now,
+		LongRun:   longRun,
 	}
 	if err := couchdb.CreateDoc(i, s); err != nil {
 		return nil, err
 	}
-	getCache().Set(i, s.DocID, s)
 	return s, nil
 }
 
 // Get fetches the session
 func Get(i *instance.Instance, sessionID string) (*Session, error) {
-	updateCache := false
-
-	s := getCache().Get(i, sessionID)
-	if s == nil {
-		s = &Session{}
-		err := couchdb.GetDoc(i, consts.Sessions, sessionID, s)
-		if couchdb.IsNotFoundError(err) {
-			return nil, ErrInvalidID
-		}
-		if err != nil {
-			return nil, err
-		}
-		updateCache = true
+	s := &Session{}
+	err := couchdb.GetDoc(i, consts.Sessions, sessionID, s)
+	if couchdb.IsNotFoundError(err) {
+		return nil, ErrInvalidID
+	}
+	if err != nil {
+		return nil, err
 	}
 	s.Instance = i
 
@@ -112,7 +107,6 @@ func Get(i *instance.Instance, sessionID string) (*Session, error) {
 		if err != nil {
 			i.Logger().Warn("[session] Failed to delete expired session:", err)
 		}
-		getCache().Revoke(i, s.DocID)
 		return nil, ErrExpired
 	}
 
@@ -126,14 +120,7 @@ func Get(i *instance.Instance, sessionID string) (*Session, error) {
 		if err != nil {
 			i.Logger().Warn("[session] Failed to update session last seen:", err)
 			s.LastSeen = lastSeen
-			updateCache = false
-		} else {
-			updateCache = true
 		}
-	}
-
-	if updateCache {
-		getCache().Set(i, s.DocID, s)
 	}
 
 	return s, nil
@@ -187,7 +174,6 @@ func GetAll(inst *instance.Instance) ([]*Session, error) {
 // and returns a cookie with a negative MaxAge to clear it
 func (s *Session) Delete(i *instance.Instance) *http.Cookie {
 	err := couchdb.DeleteDoc(i, s)
-	getCache().Revoke(i, s.DocID)
 	if err != nil {
 		i.Logger().Error("[session] Failed to delete session:", err)
 	}
@@ -196,7 +182,7 @@ func (s *Session) Delete(i *instance.Instance) *http.Cookie {
 		Value:  "",
 		MaxAge: -1,
 		Path:   "/",
-		Domain: utils.StripPort("." + i.Domain),
+		Domain: utils.StripPort("." + i.ContextualDomain()),
 	}
 }
 
@@ -207,12 +193,17 @@ func (s *Session) ToCookie() (*http.Cookie, error) {
 		return nil, err
 	}
 
+	maxAge := 0
+	if s.LongRun {
+		maxAge = 10 * 365 * 24 * 3600 // 10 years
+	}
+
 	return &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    string(encoded),
-		MaxAge:   10 * 365 * 24 * 3600, // 10 years
+		MaxAge:   maxAge,
 		Path:     "/",
-		Domain:   utils.StripPort("." + s.Instance.Domain),
+		Domain:   utils.StripPort("." + s.Instance.ContextualDomain()),
 		Secure:   !s.Instance.Dev,
 		HttpOnly: true,
 	}, nil

@@ -3,6 +3,7 @@ package sharing
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/lock"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/cozy/cozy-stack/pkg/vfs"
 	multierror "github.com/hashicorp/go-multierror"
 )
@@ -81,11 +83,39 @@ func (s *Sharing) InitialUpload(inst *instance.Instance, m *Member) error {
 			return err
 		}
 		if !more {
-			return nil
+			return s.sendInitialEndNotif(inst, m)
 		}
 	}
 
 	s.pushJob(inst, "share-upload")
+	return nil
+}
+
+// sendInitialEndNotif sends a notification to the recipient that the initial
+// sync is finished
+func (s *Sharing) sendInitialEndNotif(inst *instance.Instance, m *Member) error {
+	u, err := url.Parse(m.Instance)
+	if err != nil {
+		return err
+	}
+	c := s.FindCredentials(m)
+	if c == nil {
+		return ErrInvalidSharing
+	}
+	opts := &request.Options{
+		Method: http.MethodDelete,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   fmt.Sprintf("/sharings/%s/initial", s.SID),
+		Headers: request.Headers{
+			"Authorization": "Bearer " + c.AccessToken.AccessToken,
+		},
+	}
+	res, err := request.Req(opts)
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
 	return nil
 }
 
@@ -185,6 +215,12 @@ func (s *Sharing) findNextFileToUpload(inst *instance.Instance, since string) (m
 func (s *Sharing) uploadFile(inst *instance.Instance, m *Member, file map[string]interface{}, ruleIndex int) error {
 	inst.Logger().WithField("nspace", "upload").Debugf("going to upload %#v", file)
 
+	// Do not try to send a trashed file, the trash status will be synchronized
+	// via the CouchDB replication protocol
+	if file["trashed"].(bool) {
+		return nil
+	}
+
 	creds := s.FindCredentials(m)
 	if creds == nil {
 		return ErrInvalidSharing
@@ -214,20 +250,16 @@ func (s *Sharing) uploadFile(inst *instance.Instance, m *Member, file map[string
 	}
 	var res *http.Response
 	res, err = request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, m, creds, opts, body)
+	}
 	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return ErrInternalServerError
+		}
 		return err
 	}
-	if res.StatusCode/100 == 4 {
-		res.Body.Close()
-		res, err = RefreshToken(inst, s, m, creds, opts, body)
-		if err != nil {
-			return err
-		}
-	}
 	defer res.Body.Close()
-	if res.StatusCode/100 == 5 {
-		return ErrInternalServerError
-	}
 
 	if res.StatusCode == 204 {
 		return nil
@@ -260,15 +292,12 @@ func (s *Sharing) uploadFile(inst *instance.Instance, m *Member, file map[string
 		Body: content,
 	})
 	if err != nil {
+		if res2 != nil && res2.StatusCode/100 == 5 {
+			return ErrInternalServerError
+		}
 		return err
 	}
 	res2.Body.Close()
-	if res2.StatusCode/100 == 5 {
-		return ErrInternalServerError
-	}
-	if res2.StatusCode/100 != 2 {
-		return ErrClientError
-	}
 	return nil
 }
 
@@ -276,6 +305,11 @@ func (s *Sharing) uploadFile(inst *instance.Instance, m *Member, file map[string
 type FileDocWithRevisions struct {
 	*vfs.FileDoc
 	Revisions RevsStruct `json:"_revisions"`
+}
+
+// Clone is part of the couchdb.Doc interface
+func (f *FileDocWithRevisions) Clone() couchdb.Doc {
+	panic("FileDocWithRevisions must not be cloned")
 }
 
 // KeyToUpload contains the key for uploading a file (when syncing metadata is
@@ -512,7 +546,50 @@ func (s *Sharing) UploadNewFile(inst *instance.Instance, target *FileDocWithRevi
 			Debugf("Cannot create file: %s", err)
 		return err
 	}
+	if s.NbFiles > 0 {
+		defer s.countReceivedFiles(inst)
+	}
 	return copyFileContent(inst, file, body)
+}
+
+// countReceivedFiles counts the number of files received during the initial
+// sync, and pushs an event to the real-time system with this count
+func (s *Sharing) countReceivedFiles(inst *instance.Instance) {
+	count := 0
+	var req = &couchdb.ViewRequest{
+		Key:         s.SID,
+		IncludeDocs: true,
+	}
+	var res couchdb.ViewResponse
+	err := couchdb.ExecView(inst, consts.SharedDocsBySharingID, req, &res)
+	if err == nil {
+		for _, row := range res.Rows {
+			var doc SharedRef
+			if err = json.Unmarshal(row.Doc, &doc); err != nil {
+				continue
+			}
+			if doc.Infos[s.SID].Binary {
+				count++
+			}
+		}
+	}
+
+	if count >= s.NbFiles {
+		if err = s.EndInitial(inst); err != nil {
+			inst.Logger().WithField("nspace", "sharing").
+				Errorf("Can't save sharing %v: %s", s, err)
+		}
+		return
+	}
+
+	doc := couchdb.JSONDoc{
+		Type: consts.SharingsInitialSync,
+		M: map[string]interface{}{
+			"_id":   s.SID,
+			"count": count,
+		},
+	}
+	realtime.GetHub().Publish(inst, realtime.EventUpdate, doc, nil)
 }
 
 // UploadExistingFile is used to receive new content for an existing file.
@@ -520,7 +597,7 @@ func (s *Sharing) UploadNewFile(inst *instance.Instance, target *FileDocWithRevi
 // Note: if file was renamed + its content has changed, we modify the content
 // first, then rename it, not trying to do both at the same time. We do it in
 // this order because the difficult case is if one operation succeeds and the
-// other fails (if the two suceeds, we are fine; if the two fails, we just
+// other fails (if the two succeeds, we are fine; if the two fails, we just
 // retry), and in that case, it is easier to manage a conflict on dir_id+name
 // than on content: a conflict on different content is resolved by a copy of
 // the file (which is not what we want), a conflict of name+dir_id, the higher
@@ -642,7 +719,7 @@ func (s *Sharing) uploadLostConflict(inst *instance.Instance, target *FileDocWit
 }
 
 // uploadWonConflict manages an upload where a file is in conflict, and the
-// existing file is copied to a new file to let the upload suceed.
+// existing file is copied to a new file to let the upload succeed.
 func (s *Sharing) uploadWonConflict(inst *instance.Instance, src *vfs.FileDoc) error {
 	rev := src.Rev()
 	inst.Logger().WithField("nspace", "upload").Debugf("uploadWonConflict %s", rev)

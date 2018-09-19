@@ -8,12 +8,14 @@ import (
 
 	"github.com/cozy/checkup"
 	"github.com/cozy/cozy-stack/pkg/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/index"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/sessions"
 	"github.com/cozy/cozy-stack/pkg/utils"
+	"github.com/cozy/cozy-stack/pkg/workers/updates"
 
 	"github.com/google/gops/agent"
 	"github.com/sirupsen/logrus"
@@ -80,6 +82,9 @@ security features. Please do not use this binary as your production server.
 	if err != nil {
 		return
 	}
+	if err = consts.InitGlobalDB(); err != nil {
+		return
+	}
 
 	// Init the main global connection to the swift server
 	fsURL := config.FsURL()
@@ -87,12 +92,6 @@ security features. Please do not use this binary as your production server.
 		if err = config.InitSwiftConnection(fsURL); err != nil {
 			return
 		}
-	}
-
-	// Start update cron for auto-updates
-	cronUpdates, err := instance.StartUpdateCron()
-	if err != nil {
-		return
 	}
 
 	workersList, err := jobs.GetWorkersList()
@@ -115,12 +114,30 @@ security features. Please do not use this binary as your production server.
 		return
 	}
 
+	autoUpdates := config.GetConfig().AutoUpdates
+	cronSpecs := []jobs.CronSpec{
+		{
+			Activated:  autoUpdates.Activated,
+			Schedule:   autoUpdates.Schedule,
+			WorkerType: "updates",
+			WorkerTemplate: func() (jobs.Message, error) {
+				return jobs.NewMessage(updates.Options{AllDomains: true})
+			},
+		},
+	}
+
+	// Start update cron for auto-updates
+	crons, err := jobs.CronJobs(cronSpecs)
+	if err != nil {
+		return
+	}
+
 	sessionSweeper := sessions.SweepLoginRegistrations()
 
 	// Global shutdowner that composes all the running processes of the stack
 	processes = utils.NewGroupShutdown(
 		jobs.System(),
-		cronUpdates,
+		crons,
 		sessionSweeper,
 		gopAgent{},
 	)

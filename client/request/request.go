@@ -27,6 +27,7 @@ type (
 	// token bearer.
 	Authorizer interface {
 		AuthHeader() string
+		RealtimeToken() string
 	}
 
 	// Headers is a map of strings used to represent HTTP headers
@@ -82,6 +83,11 @@ func (b *BasicAuthorizer) AuthHeader() string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
+// RealtimeToken implemented the interface Authorizer.
+func (b *BasicAuthorizer) RealtimeToken() string {
+	return ""
+}
+
 // BearerAuthorizer implements a placeholder authorizer if the token is already
 // known.
 type BearerAuthorizer struct {
@@ -91,6 +97,11 @@ type BearerAuthorizer struct {
 // AuthHeader implemented the interface Authorizer.
 func (b *BearerAuthorizer) AuthHeader() string {
 	return "Bearer " + b.Token
+}
+
+// RealtimeToken implemented the interface Authorizer.
+func (b *BearerAuthorizer) RealtimeToken() string {
+	return b.Token
 }
 
 // Req performs a request with the specified request options.
@@ -149,7 +160,7 @@ func Req(opts *Options) (*http.Response, error) {
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, parseError(opts, res)
+		return res, parseError(opts, res)
 	}
 
 	if opts.NoResponse {
@@ -182,7 +193,7 @@ func parseError(opts *Options, res *http.Response) (err error) {
 	return opts.ParseError(res, b)
 }
 
-// ErrSSEParse is used when an error occured while parsing the SSE stream.
+// ErrSSEParse is used when an error occurred while parsing the SSE stream.
 var ErrSSEParse = errors.New("could not parse event stream")
 
 // SSEEvent holds the data of a single SSE event.

@@ -68,6 +68,13 @@ func (p *Permission) Clone() couchdb.Doc {
 	for k, v := range p.Codes {
 		cloned.Codes[k] = v
 	}
+	cloned.Permissions = make([]Rule, len(p.Permissions))
+	for i, r := range p.Permissions {
+		vals := r.Values
+		r.Values = make([]string, len(r.Values))
+		copy(r.Values, vals)
+		cloned.Permissions[i] = r
+	}
 	return &cloned
 }
 
@@ -257,7 +264,11 @@ func GetForShareCode(db prefixer.Prefixer, tokenCode string) (*Permission, error
 		parts := strings.SplitN(perm.SourceID, "/", 2)
 		if len(parts) == 2 {
 			var doc couchdb.JSONDoc
-			if err := couchdb.GetDoc(db, parts[0], parts[0]+"/"+parts[1], &doc); err != nil {
+			docID := parts[0] + "/" + parts[1]
+			if parts[0] == consts.Sharings {
+				docID = parts[1]
+			}
+			if err := couchdb.GetDoc(db, parts[0], docID, &doc); err != nil {
 				return nil, ErrExpiredToken
 			}
 		}

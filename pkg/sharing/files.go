@@ -105,7 +105,7 @@ func (s *Sharing) SortFilesToSent(files []map[string]interface{}) {
 // - the path is removed (directory only)
 //
 // ruleIndexes is a map of "doctype-docid" -> rule index
-func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte, ruleIndex int) map[string]interface{} {
+func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte, ruleIndex int) {
 	if doc["type"] == consts.DirType {
 		delete(doc, "path")
 	}
@@ -113,7 +113,7 @@ func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte,
 	doc["_id"] = XorID(id, xorKey)
 	dir, ok := doc["dir_id"].(string)
 	if !ok {
-		return doc
+		return
 	}
 	rule := s.Rules[ruleIndex]
 	var noDirID bool
@@ -155,7 +155,6 @@ func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte,
 	} else {
 		doc["dir_id"] = XorID(dir, xorKey)
 	}
-	return doc
 }
 
 // EnsureSharedWithMeDir returns the shared-with-me directory, and create it if
@@ -224,7 +223,13 @@ func (s *Sharing) CreateDirForSharing(inst *instance.Instance, rule *Rule) (*vfs
 		Type: consts.Sharings,
 	})
 	if err = fs.CreateDir(dir); err != nil {
-		return nil, err
+		dir.DocName = conflictName(dir.DocName, "")
+		dir.Fullpath = path.Join(parent.Fullpath, dir.DocName)
+		if err = fs.CreateDir(dir); err != nil {
+			inst.Logger().WithField("nspace", "sharing").
+				Errorf("Cannot create the sharing directory: %s", err)
+			return nil, err
+		}
 	}
 	return dir, err
 }
@@ -275,6 +280,23 @@ func (s *Sharing) GetSharingDir(inst *instance.Instance) (*vfs.DirDoc, error) {
 		return s.CreateDirForSharing(inst, rule)
 	}
 	return inst.VFS().DirByID(res.Rows[0].ID)
+}
+
+// RemoveSharingDir removes the reference on the sharing directory.
+// It should be called when a sharing is revoked, on the recipient Cozy.
+func (s *Sharing) RemoveSharingDir(inst *instance.Instance) error {
+	dir, err := s.GetSharingDir(inst)
+	if couchdb.IsNotFoundError(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	olddoc := dir.Clone().(*vfs.DirDoc)
+	dir.RemoveReferencedBy(couchdb.DocReference{
+		ID:   s.SID,
+		Type: consts.Sharings,
+	})
+	return inst.VFS().UpdateDirDoc(olddoc, dir)
 }
 
 // GetNoLongerSharedDir returns the directory used for files and folders that
@@ -349,7 +371,8 @@ func (s *Sharing) GetFolder(inst *instance.Instance, m *Member, xoredID string) 
 	if err != nil {
 		return nil, err
 	}
-	doc := s.TransformFileToSent(dirToJSONDoc(dir).M, creds.XorKey, info.Rule)
+	doc := dirToJSONDoc(dir).M
+	s.TransformFileToSent(doc, creds.XorKey, info.Rule)
 	return doc, nil
 }
 
@@ -556,20 +579,16 @@ func (s *Sharing) getDirDocFromInstance(inst *instance.Instance, m *Member, cred
 		},
 	}
 	res, err := request.Req(opts)
+	if res != nil && res.StatusCode/100 == 4 {
+		res, err = RefreshToken(inst, s, m, creds, opts, nil)
+	}
 	if err != nil {
+		if res != nil && res.StatusCode/100 == 5 {
+			return nil, ErrInternalServerError
+		}
 		return nil, err
 	}
-	if res.StatusCode/100 == 4 {
-		res.Body.Close()
-		res, err = RefreshToken(inst, s, m, creds, opts, nil)
-		if err != nil {
-			return nil, err
-		}
-	}
 	defer res.Body.Close()
-	if res.StatusCode/100 == 5 {
-		return nil, ErrInternalServerError
-	}
 	var doc *vfs.DirDoc
 	if err = json.NewDecoder(res.Body).Decode(&doc); err != nil {
 		return nil, err
@@ -854,14 +873,14 @@ func dirToJSONDoc(dir *vfs.DirDoc) couchdb.JSONDoc {
 	doc := couchdb.JSONDoc{
 		Type: consts.Files,
 		M: map[string]interface{}{
-			"type":       dir.Type,
-			"_id":        dir.DocID,
-			"_rev":       dir.DocRev,
-			"name":       dir.DocName,
-			"created_at": dir.CreatedAt,
-			"updated_at": dir.UpdatedAt,
-			"tags":       dir.Tags,
-			"path":       dir.Fullpath,
+			"type":                       dir.Type,
+			"_id":                        dir.DocID,
+			"_rev":                       dir.DocRev,
+			"name":                       dir.DocName,
+			"created_at":                 dir.CreatedAt,
+			"updated_at":                 dir.UpdatedAt,
+			"tags":                       dir.Tags,
+			"path":                       dir.Fullpath,
 			couchdb.SelectorReferencedBy: dir.ReferencedBy,
 		},
 	}
@@ -878,19 +897,19 @@ func fileToJSONDoc(file *vfs.FileDoc) couchdb.JSONDoc {
 	doc := couchdb.JSONDoc{
 		Type: consts.Files,
 		M: map[string]interface{}{
-			"type":       file.Type,
-			"_id":        file.DocID,
-			"_rev":       file.DocRev,
-			"name":       file.DocName,
-			"created_at": file.CreatedAt,
-			"updated_at": file.UpdatedAt,
-			"size":       file.ByteSize,
-			"md5sum":     file.MD5Sum,
-			"mime":       file.Mime,
-			"class":      file.Class,
-			"executable": file.Executable,
-			"trashed":    file.Trashed,
-			"tags":       file.Tags,
+			"type":                       file.Type,
+			"_id":                        file.DocID,
+			"_rev":                       file.DocRev,
+			"name":                       file.DocName,
+			"created_at":                 file.CreatedAt,
+			"updated_at":                 file.UpdatedAt,
+			"size":                       file.ByteSize,
+			"md5sum":                     file.MD5Sum,
+			"mime":                       file.Mime,
+			"class":                      file.Class,
+			"executable":                 file.Executable,
+			"trashed":                    file.Trashed,
+			"tags":                       file.Tags,
 			couchdb.SelectorReferencedBy: file.ReferencedBy,
 		},
 	}

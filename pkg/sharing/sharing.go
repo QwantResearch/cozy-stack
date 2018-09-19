@@ -2,8 +2,11 @@ package sharing
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/apps"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/contacts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -11,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/permissions"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 	multierror "github.com/hashicorp/go-multierror"
 )
 
@@ -40,6 +44,7 @@ type Sharing struct {
 	PreviewPath string    `json:"preview_path,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	NbFiles     int       `json:"initial_number_of_files_to_sync,omitempty"`
 
 	Rules []Rule `json:"rules"`
 
@@ -71,33 +76,46 @@ func (s *Sharing) Clone() couchdb.Doc {
 	cloned := *s
 	cloned.Rules = make([]Rule, len(s.Rules))
 	copy(cloned.Rules, s.Rules)
+	for i := range cloned.Rules {
+		cloned.Rules[i].Values = make([]string, len(s.Rules[i].Values))
+		copy(cloned.Rules[i].Values, s.Rules[i].Values)
+	}
 	cloned.Members = make([]Member, len(s.Members))
 	copy(cloned.Members, s.Members)
 	cloned.Credentials = make([]Credentials, len(s.Credentials))
 	copy(cloned.Credentials, s.Credentials)
+	for i := range s.Credentials {
+		if s.Credentials[i].Client != nil {
+			cloned.Credentials[i].Client = s.Credentials[i].Client.Clone()
+		}
+		if s.Credentials[i].AccessToken != nil {
+			cloned.Credentials[i].AccessToken = s.Credentials[i].AccessToken.Clone()
+		}
+		cloned.Credentials[i].XorKey = make([]byte, len(s.Credentials[i].XorKey))
+		copy(cloned.Credentials[i].XorKey, s.Credentials[i].XorKey)
+	}
 	return &cloned
 }
 
 // ReadOnly returns true only if the rules forbid that a change on the
-// recipients' cozy instances can be propagated to the sharer's cozy.
+// recipient's cozy instance can be propagated to the sharer's cozy.
 func (s *Sharing) ReadOnly() bool {
+	if !s.Owner {
+		for i, m := range s.Members {
+			if i == 0 {
+				continue // skip owner
+			}
+			if m.Instance != "" {
+				return m.ReadOnly
+			}
+		}
+	}
 	for _, rule := range s.Rules {
 		if rule.HasSync() {
 			return false
 		}
 	}
 	return true
-}
-
-// WithPropagation returns true if no rule allows that a change can be propagated, in
-// one way or another
-func (s *Sharing) WithPropagation() bool {
-	for _, rule := range s.Rules {
-		if rule.HasSync() || rule.HasPush() {
-			return true
-		}
-	}
-	return false
 }
 
 // BeOwner initializes a sharing on the cozy of its owner
@@ -204,7 +222,19 @@ func (s *Sharing) CreateRequest(inst *instance.Instance) error {
 		}
 	}
 
-	return couchdb.CreateNamedDocWithDB(inst, s)
+	err := couchdb.CreateNamedDocWithDB(inst, s)
+	if couchdb.IsConflictError(err) {
+		old, errb := FindSharing(inst, s.SID)
+		if errb != nil {
+			return errb
+		}
+		if old.Active {
+			return ErrAlreadyAccepted
+		}
+		s.SRev = old.SRev
+		err = couchdb.UpdateDoc(inst, s)
+	}
+	return err
 }
 
 // Revoke remove the credentials for all members, contact them, removes the
@@ -219,6 +249,9 @@ func (s *Sharing) Revoke(inst *instance.Instance) error {
 		if err := s.RevokeMember(inst, &s.Members[i+1], &s.Credentials[i]); err != nil {
 			errm = multierror.Append(errm, err)
 		}
+		if err := s.ClearLastSequenceNumbers(inst, &s.Members[i+1]); err != nil {
+			return err
+		}
 	}
 	if err := s.RemoveTriggers(inst); err != nil {
 		return err
@@ -226,11 +259,28 @@ func (s *Sharing) Revoke(inst *instance.Instance) error {
 	if err := RemoveSharedRefs(inst, s.SID); err != nil {
 		return err
 	}
+	if s.PreviewPath != "" {
+		if err := s.RevokePreviewPermissions(inst); err != nil {
+			return err
+		}
+	}
 	s.Active = false
 	if err := couchdb.UpdateDoc(inst, s); err != nil {
 		return err
 	}
 	return errm
+}
+
+// RevokePreviewPermissions ensure that the permissions for the preview page
+// are no longer valid.
+func (s *Sharing) RevokePreviewPermissions(inst *instance.Instance) error {
+	perms, err := permissions.GetForSharePreview(inst, s.SID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	perms.ExpiresAt = &now
+	return couchdb.UpdateDoc(inst, perms)
 }
 
 // RevokeRecipient revoke only one recipient on the sharer. After that, if the
@@ -241,6 +291,9 @@ func (s *Sharing) RevokeRecipient(inst *instance.Instance, index int) error {
 		return ErrInvalidSharing
 	}
 	if err := s.RevokeMember(inst, &s.Members[index], &s.Credentials[index-1]); err != nil {
+		return err
+	}
+	if err := s.ClearLastSequenceNumbers(inst, &s.Members[index]); err != nil {
 		return err
 	}
 	return s.NoMoreRecipient(inst)
@@ -257,12 +310,26 @@ func (s *Sharing) RevokeRecipientBySelf(inst *instance.Instance) error {
 	if err := s.RemoveTriggers(inst); err != nil {
 		return err
 	}
-	if s.WithPropagation() {
-		if err := RemoveSharedRefs(inst, s.SID); err != nil {
+	if err := s.ClearLastSequenceNumbers(inst, &s.Members[0]); err != nil {
+		return err
+	}
+	if err := RemoveSharedRefs(inst, s.SID); err != nil {
+		return err
+	}
+	if s.FirstFilesRule() != nil {
+		if err := s.RemoveSharingDir(inst); err != nil {
 			return err
 		}
 	}
 	s.Active = false
+
+	for i, m := range s.Members {
+		if i > 0 && m.Instance != "" {
+			s.Members[i].Status = MemberStatusRevoked
+			break
+		}
+	}
+
 	return couchdb.UpdateDoc(inst, s)
 }
 
@@ -303,13 +370,26 @@ func (s *Sharing) RevokeByNotification(inst *instance.Instance) error {
 	if err := s.RemoveTriggers(inst); err != nil {
 		return err
 	}
-	if s.WithPropagation() {
-		if err := RemoveSharedRefs(inst, s.SID); err != nil {
+	if err := s.ClearLastSequenceNumbers(inst, &s.Members[0]); err != nil {
+		return err
+	}
+	if err := RemoveSharedRefs(inst, s.SID); err != nil {
+		return err
+	}
+	if s.FirstFilesRule() != nil {
+		if err := s.RemoveSharingDir(inst); err != nil {
 			return err
 		}
 	}
 	s.Credentials = nil
 	s.Active = false
+
+	for i, m := range s.Members {
+		if i > 0 && m.Instance != "" {
+			s.Members[i].Status = MemberStatusRevoked
+			break
+		}
+	}
 
 	return couchdb.UpdateDoc(inst, s)
 }
@@ -322,6 +402,9 @@ func (s *Sharing) RevokeRecipientByNotification(inst *instance.Instance, m *Memb
 	}
 	c := s.FindCredentials(m)
 	if err := DeleteOAuthClient(inst, m, c); err != nil {
+		return err
+	}
+	if err := s.ClearLastSequenceNumbers(inst, m); err != nil {
 		return err
 	}
 	m.Status = MemberStatusRevoked
@@ -396,6 +479,68 @@ func GetSharingsByDocType(inst *instance.Instance, docType string) (map[string]*
 		}
 	}
 	return sharings, nil
+}
+
+func findIntentForRedirect(inst *instance.Instance, app *apps.WebappManifest, doctype string) (*apps.Intent, string) {
+	action := "SHARING"
+	if app != nil {
+		if intent := app.FindIntent(action, doctype); intent != nil {
+			return intent, app.Slug()
+		}
+	}
+	var mans []apps.WebappManifest
+	err := couchdb.GetAllDocs(inst, consts.Apps, &couchdb.AllDocsRequest{}, &mans)
+	if err != nil {
+		return nil, ""
+	}
+	for _, man := range mans {
+		if intent := man.FindIntent(action, doctype); intent != nil {
+			return intent, man.Slug()
+		}
+	}
+	return nil, ""
+}
+
+// RedirectAfterAuthorizeURL returns the URL for the redirection after a user
+// has authorized a sharing.
+func (s *Sharing) RedirectAfterAuthorizeURL(inst *instance.Instance) *url.URL {
+	doctype := s.Rules[0].DocType
+	app, _ := apps.GetWebappBySlug(inst, s.AppSlug)
+
+	if intent, slug := findIntentForRedirect(inst, app, doctype); intent != nil {
+		u := inst.SubDomain(slug)
+		parts := strings.SplitN(intent.Href, "#", 2)
+		if len(parts[0]) > 0 {
+			u.Path = parts[0]
+		}
+		if len(parts) == 2 && len(parts[1]) > 0 {
+			u.Fragment = parts[1]
+		}
+		u.RawQuery = "sharing=" + s.SID
+		return u
+	}
+
+	if app == nil {
+		return inst.DefaultRedirection()
+	}
+	return inst.SubDomain(app.Slug())
+}
+
+// EndInitial is used to finish the initial sync phase of a sharing
+func (s *Sharing) EndInitial(inst *instance.Instance) error {
+	if s.NbFiles == 0 {
+		return nil
+	}
+	s.NbFiles = 0
+	if err := couchdb.UpdateDoc(inst, s); err != nil {
+		return err
+	}
+	doc := couchdb.JSONDoc{
+		Type: consts.SharingsInitialSync,
+		M:    map[string]interface{}{"_id": s.SID},
+	}
+	realtime.GetHub().Publish(inst, realtime.EventDelete, doc, nil)
+	return nil
 }
 
 var _ couchdb.Doc = &Sharing{}

@@ -21,6 +21,8 @@ type Instance struct {
 	} `json:"meta"`
 	Attrs struct {
 		Domain               string    `json:"domain"`
+		DomainAliases        []string  `json:"domain_aliases,omitempty"`
+		Prefix               string    `json:"prefix,omitempty"`
 		Locale               string    `json:"locale"`
 		UUID                 string    `json:"uuid,omitempty"`
 		ContextName          string    `json:"context,omitempty"`
@@ -28,6 +30,7 @@ type Instance struct {
 		TOSLatest            string    `json:"tos_latest,omitempty"`
 		AuthMode             int       `json:"auth_mode,omitempty"`
 		NoAutoUpdate         bool      `json:"no_auto_update,omitempty"`
+		Blocked              bool      `json:"blocked,omitempty"`
 		Dev                  bool      `json:"dev"`
 		OnboardingFinished   bool      `json:"onboarding_finished"`
 		BytesDiskQuota       int64     `json:"disk_quota,string,omitempty"`
@@ -42,6 +45,7 @@ type Instance struct {
 // InstanceOptions contains the options passed on instance creation.
 type InstanceOptions struct {
 	Domain             string
+	DomainAliases      []string
 	Locale             string
 	UUID               string
 	TOSSigned          string
@@ -56,6 +60,7 @@ type InstanceOptions struct {
 	Apps               []string
 	Passphrase         string
 	Debug              *bool
+	Blocked            *bool
 	OnboardingFinished *bool
 	Dev                bool
 }
@@ -66,6 +71,7 @@ type TokenOptions struct {
 	Subject  string
 	Audience string
 	Scope    []string
+	Expire   *time.Duration
 }
 
 // OAuthClientOptions is a struct holding all the options to generate an OAuth
@@ -79,9 +85,12 @@ type OAuthClientOptions struct {
 
 // UpdatesOptions is a struct holding all the options to launch an update.
 type UpdatesOptions struct {
-	Domain        string
-	Slugs         []string
-	ForceRegistry bool
+	Domain             string
+	DomainsWithContext string
+	Slugs              []string
+	ForceRegistry      bool
+	OnlyRegistry       bool
+	Logs               chan *JobLog
 }
 
 // ImportOptions is a struct with the options for importing a tarball.
@@ -124,6 +133,9 @@ func (c *Client) CreateInstance(opts *InstanceOptions) (*Instance, error) {
 		"Apps":         {strings.Join(opts.Apps, ",")},
 		"Passphrase":   {opts.Passphrase},
 		"Dev":          {strconv.FormatBool(opts.Dev)},
+	}
+	if opts.DomainAliases != nil {
+		q.Add("DomainAliases", strings.Join(opts.DomainAliases, ","))
 	}
 	res, err := c.Req(&request.Options{
 		Method:  "POST",
@@ -171,8 +183,14 @@ func (c *Client) ModifyInstance(opts *InstanceOptions) (*Instance, error) {
 		"SwiftCluster": {strconv.Itoa(opts.SwiftCluster)},
 		"DiskQuota":    {strconv.FormatInt(opts.DiskQuota, 10)},
 	}
+	if opts.DomainAliases != nil {
+		q.Add("DomainAliases", strings.Join(opts.DomainAliases, ","))
+	}
 	if opts.Debug != nil {
 		q.Add("Debug", strconv.FormatBool(*opts.Debug))
+	}
+	if opts.Blocked != nil {
+		q.Add("Blocked", strconv.FormatBool(*opts.Blocked))
 	}
 	if opts.OnboardingFinished != nil {
 		q.Add("OnboardingFinished", strconv.FormatBool(*opts.OnboardingFinished))
@@ -232,6 +250,9 @@ func (c *Client) GetToken(opts *TokenOptions) (string, error) {
 		"Audience": {opts.Audience},
 		"Scope":    {strings.Join(opts.Scope, " ")},
 	}
+	if opts.Expire != nil {
+		q.Add("Expire", opts.Expire.String())
+	}
 	res, err := c.Req(&request.Options{
 		Method:  "POST",
 		Path:    "/instances/token",
@@ -277,16 +298,69 @@ func (c *Client) RegisterOAuthClient(opts *OAuthClientOptions) (map[string]inter
 // specified, the updates are launched for all the existing instances.
 func (c *Client) Updates(opts *UpdatesOptions) error {
 	q := url.Values{
-		"Domain":        {opts.Domain},
-		"Slugs":         {strings.Join(opts.Slugs, ",")},
-		"ForceRegistry": {strconv.FormatBool(opts.ForceRegistry)},
+		"Domain":             {opts.Domain},
+		"DomainsWithContext": {opts.DomainsWithContext},
+		"Slugs":              {strings.Join(opts.Slugs, ",")},
+		"ForceRegistry":      {strconv.FormatBool(opts.ForceRegistry)},
+		"OnlyRegistry":       {strconv.FormatBool(opts.OnlyRegistry)},
 	}
-	_, err := c.Req(&request.Options{
-		Method:     "POST",
-		Path:       "/instances/updates",
-		Queries:    q,
-		NoResponse: true,
+	channel, err := c.RealtimeClient(RealtimeOptions{
+		DocTypes: []string{"io.cozy.jobs", "io.cozy.jobs.logs"},
 	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if opts.Logs != nil {
+			close(opts.Logs)
+		}
+		channel.Close()
+	}()
+	res, err := c.Req(&request.Options{
+		Method:  "POST",
+		Path:    "/instances/updates",
+		Queries: q,
+	})
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	var job struct {
+		ID    string `json:"_id"`
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err = json.NewDecoder(res.Body).Decode(&job); err != nil {
+		return err
+	}
+	for evt := range channel.Channel() {
+		if evt.Event == "error" {
+			return fmt.Errorf("realtime: %s", evt.Payload.Title)
+		}
+		if evt.Payload.ID != job.ID {
+			continue
+		}
+		switch evt.Payload.Type {
+		case "io.cozy.jobs":
+			if err = json.Unmarshal(evt.Payload.Doc, &job); err != nil {
+				return err
+			}
+			if job.State == "errored" {
+				return fmt.Errorf("error executing updates: %s", job.Error)
+			}
+			if job.State == "done" {
+				return nil
+			}
+		case "io.cozy.jobs.logs":
+			if opts.Logs != nil {
+				var log JobLog
+				if err = json.Unmarshal(evt.Payload.Doc, &log); err != nil {
+					return err
+				}
+				opts.Logs <- &log
+			}
+		}
+	}
 	return err
 }
 

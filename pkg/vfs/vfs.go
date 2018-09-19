@@ -214,7 +214,7 @@ type ThumbFiler interface {
 }
 
 // VFS is composed of the Indexer and Fs interface. It is the common interface
-// used thoughout the stack to access the VFS.
+// used throughout the stack to access the VFS.
 type VFS interface {
 	Indexer
 	DiskThresholder
@@ -268,6 +268,11 @@ type DirOrFileDoc struct {
 	Executable bool     `json:"executable,omitempty"`
 	Trashed    bool     `json:"trashed,omitempty"`
 	Metadata   Metadata `json:"metadata,omitempty"`
+}
+
+// Clone is part of the couchdb.Doc interface
+func (fd *DirOrFileDoc) Clone() couchdb.Doc {
+	panic("DirOrFileDoc must not be cloned")
 }
 
 // Refine returns either a DirDoc or FileDoc pointer depending on the type of
@@ -400,7 +405,7 @@ func Mkdir(fs VFS, name string, tags []string) (*DirDoc, error) {
 
 // MkdirAll creates a directory named path, along with any necessary
 // parents, and returns nil, or else returns an error.
-func MkdirAll(fs VFS, name string, tags []string) (*DirDoc, error) {
+func MkdirAll(fs VFS, name string) (*DirDoc, error) {
 	var err error
 	var dirs []string
 	var base, file string
@@ -732,7 +737,7 @@ func getRestoreDir(fs VFS, name, restorePath string) (*DirDoc, error) {
 	// directory hierarchy to restore the file in.
 	restoreDir, err := fs.DirByPath(restorePath)
 	if os.IsNotExist(err) {
-		return MkdirAll(fs, restorePath, nil)
+		return MkdirAll(fs, restorePath)
 	}
 	return restoreDir, err
 }

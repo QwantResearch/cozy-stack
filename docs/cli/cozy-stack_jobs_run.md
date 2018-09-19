@@ -1,19 +1,22 @@
-## cozy-stack instances clean
+## cozy-stack jobs run
 
-Clean badly removed instances
+
 
 ### Synopsis
 
-Clean badly removed instances
+
 
 ```
-cozy-stack instances clean [domain] [flags]
+cozy-stack jobs run <worker> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for clean
+  -h, --help           help for run
+      --json string    specify the job arguments as raw JSON
+      --logs           print jobs log in stdout
+      --logs-verbose   verbose logging (with --logs flag)
 ```
 
 ### Options inherited from parent commands
@@ -22,11 +25,12 @@ cozy-stack instances clean [domain] [flags]
       --admin-host string   administration server host (default "localhost")
       --admin-port int      administration server port (default 6060)
   -c, --config string       configuration file (default "$HOME/.cozy.yaml")
+      --domain string       specify the domain name of the instance (default "cozy.tools:8080")
       --host string         server host (default "localhost")
   -p, --port int            server port (default 8080)
 ```
 
 ### SEE ALSO
 
-* [cozy-stack instances](cozy-stack_instances.md)	 - Manage instances of a stack
+* [cozy-stack jobs](cozy-stack_jobs.md)	 - Launch and manage jobs and workers
 

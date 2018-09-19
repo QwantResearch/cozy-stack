@@ -76,6 +76,36 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("Authentication error: %s (%s)", e.Description, e.Value)
 }
 
+// Clone returns a new Client with cloned values
+func (c *Client) Clone() *Client {
+	redirects := make([]string, len(c.RedirectURIs))
+	copy(redirects, c.RedirectURIs)
+	return &Client{
+		ClientID:          c.ClientID,
+		ClientSecret:      c.ClientSecret,
+		SecretExpiresAt:   c.SecretExpiresAt,
+		RegistrationToken: c.RegistrationToken,
+		RedirectURIs:      redirects,
+		ClientName:        c.ClientName,
+		ClientKind:        c.ClientKind,
+		ClientURI:         c.ClientURI,
+		LogoURI:           c.LogoURI,
+		PolicyURI:         c.PolicyURI,
+		SoftwareID:        c.SoftwareID,
+		SoftwareVersion:   c.SoftwareVersion,
+	}
+}
+
+// Clone returns a new AccessToken with cloned values
+func (t *AccessToken) Clone() *AccessToken {
+	return &AccessToken{
+		TokenType:    t.TokenType,
+		AccessToken:  t.AccessToken,
+		RefreshToken: t.RefreshToken,
+		Scope:        t.Scope,
+	}
+}
+
 // AuthHeader implements the Tokener interface for the client
 func (c *Client) AuthHeader() string {
 	return "Bearer " + c.RegistrationToken
@@ -86,9 +116,19 @@ func (t *AccessToken) AuthHeader() string {
 	return "Bearer " + t.AccessToken
 }
 
+// RealtimeToken implements the Tokener interface for the access token
+func (t *AccessToken) RealtimeToken() string {
+	return t.AccessToken
+}
+
 // AuthHeader implements the Tokener interface for the request
 func (r *Request) AuthHeader() string {
 	return r.token.AuthHeader()
+}
+
+// RealtimeToken implements the Tokener interface for the access token
+func (r *Request) RealtimeToken() string {
+	return r.token.RealtimeToken()
 }
 
 // defaultClient defaults some values of the given client
@@ -151,7 +191,7 @@ func (r *Request) Authenticate() error {
 	if state != query.Get("state") {
 		return errors.New("Non matching states")
 	}
-	token, err = r.GetAccessToken(client, query.Get("access_code"))
+	token, err = r.GetAccessToken(client, query.Get("code"))
 	if err != nil {
 		return err
 	}

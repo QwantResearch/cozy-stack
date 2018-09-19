@@ -48,6 +48,9 @@ msgstr "show"
 msgid "Login Password button hide"
 msgstr "hide"
 
+msgid "Login Long Session"
+msgstr "Memorize"
+
 msgid "Login Submit"
 msgstr "Log in"
 
@@ -260,6 +263,18 @@ msgstr "The reset of the password has already been requested. Please check your 
 msgid "Error Invalid mail token"
 msgstr "The link to confirm your email is truncated or has expired"
 
+msgid "Error Invalid sharing"
+msgstr "It looks like the sharing was not found or has been revoked"
+
+msgid "Error Sharing already accepted Title"
+msgstr "You have already accepted this sharing"
+
+msgid "Error Sharing already accepted"
+msgstr "You should find this sharing on your Cozy."
+
+msgid "Error Sharing already accepted Button"
+msgstr "Go to my Cozy: %s"
+
 msgid "Two Factor Activation"
 msgstr "Authentication with two-factor is activated"
 
@@ -350,6 +365,12 @@ msgstr "Societary (Maif)"
 msgid "Permissions org.fing.mesinfos.insuranceclaim"
 msgstr "Insurance claims (Maif)"
 
+msgid "Permissions cc.cozycloud.autocategorization"
+msgstr "Categorization model enrichment file"
+
+msgid "Permissions cc.cozycloud.sentry"
+msgstr "Application logs"
+
 msgid "Mail Greeting"
 msgstr "Hello"
 
@@ -404,10 +425,10 @@ msgid "Mail Two Factor Subject"
 msgstr "Verify your connection to Cozy"
 
 msgid "Mail Two Factor Intro"
-msgstr "Here is the code to use for two-factor authentication: {{.TwoFactorPasscode}}."
+msgstr "Two-factor authentication is enabled for your Cozy. Enter the following code to verify your identity : {{.TwoFactorPasscode}}."
 
 msgid "Mail Two Factor Outro"
-msgstr "If you think you are not the right recipient, please contact us at contact@cozycloud.cc"
+msgstr "Not sure what to do? Get some help from contact@cozycloud.cc"
 
 msgid "Mail Two Factor Mail Confirmation Subject"
 msgstr "You want to enable two-factor authentication on your Cozy"

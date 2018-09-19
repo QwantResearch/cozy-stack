@@ -54,6 +54,7 @@ Date: Mon, 19 Sep 2016 12:35:08 GMT
 * 201 Created, when the directory has been successfully created
 * 404 Not Found, when the parent directory does not exist
 * 409 Conflict, when a directory with the same name already exists
+* 413 Payload Too Large, when there is not enough available space on the cozy to upload the file
 * 422 Unprocessable Entity, when the `Type` or `Name` parameter is missing or
   invalid
 
@@ -545,7 +546,10 @@ Both endpoints can be used to update the metadata of a file or directory, or to
 rename/move it. The difference is the first one uses an id to identify the
 file/directory to update, and the second one uses the path.
 
-The `dir_id` attribute can be updated to move a file or directory.
+Some specific attributes of the patch can be used:
+  - `dir_id` attribute can be updated to move a file or directory
+  - `move_to_trash` boolean to specify that the file needs to be moved to the trash
+  - `permanent_delete` boolean to specify that the files needs to be deleted (after being trashed)
 
 #### HTTP headers
 
@@ -569,7 +573,6 @@ Content-Type: application/vnd.api+json
       "type": "file",
       "name": "hi.txt",
       "dir_id": "f2f36fec-8018-11e6-abd8-8b3814d9a465",
-      "trashed": false,
       "tags": ["poem"]
     }
   }
@@ -633,6 +636,41 @@ Location: http://cozy.example.com/files/9152d568-7e7c-11e6-a377-37cbfb190b4b
   }
 }
 ```
+
+### PATCH /files/
+
+Endpoint to update the metadata of files and directories in batch. It can be
+used, for instance, to move many files in a single request.
+
+#### Request
+
+```http
+PATCH /files/
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.files",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b",
+      "meta": { "rev": "1-0e6d5b72" },
+      "attributes": { "dir_id": "f2f36fec-8018-11e6-abd8-8b3814d9a465" }
+    },
+    {
+      "type": "io.cozy.files",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4c",
+      "meta": { "rev": "2-123123" },
+      "attributes": { "move_to_trash": true }
+    }
+  ]
+}
+```
+
+#### Status codes
+
+The same status codes can be encountered as the `PATCH /files/:file-id` route.
 
 ### POST /files/archive
 

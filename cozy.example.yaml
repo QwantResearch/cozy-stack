@@ -69,6 +69,12 @@ jobs:
   # path to the imagemagick convert binary
   # imagemagick_convert_cmd: convert
 
+  # Specify whether the given list of jobs is a whitelist or blacklist. In case
+  # of a whitelist, all jobs are deactivated by default and only the listed one
+  # are activated.
+  #
+  # whitelist: false
+
   # workers individual configrations.
   #
   # For each worker type it is possible to configure the following fields:
@@ -90,6 +96,7 @@ jobs:
   #   - "share-track":     idem
   #   - "share-upload":    idem
   #   - "unzip":           unzipping tarball
+  #   - "updates":         run updates for installed applications
   #
   # When no configuration is given for a worker, a default configuration is
   # used. When a false boolean value is given, the worker is deactivated.
@@ -174,7 +181,6 @@ redis:
   # databases number for each part of the stack using a specific database.
   databases:
     jobs: 0
-    cache: 1
     lock: 2
     sessions: 3
     downloads: 4
@@ -201,7 +207,7 @@ auto_updates:
 
 # Registries used for applications and konnectors
 registries:
-  - https://apps-registry.cozy.io/
+  - https://apps-registry.cozycloud.cc/
 
 notifications:
   # Activate development APIs (iOS only)
@@ -222,6 +228,9 @@ csp_whitelist:
   # img:    https://whitelisted.domain.com/
   # style:  https://whitelisted.domain.com/
   # font:   https://whitelisted.domain.com/
+
+# It can useful to disable the CSP policy to debug and test things in local
+# disable_csp: true
 
 log:
   # logger level (debug, info, warning, panic, fatal) - flags: --log-level

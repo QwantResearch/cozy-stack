@@ -34,6 +34,16 @@ If necessary, the application can list the permissions for the token by calling
 The owner of a cozy instance can send and synchronize documents to others cozy
 users.
 
+### Intents
+
+When a sharing is authorized, the user is redirected to their cozy on the
+application that was used for the sharing (when possible). It's possible to
+use a specific route to do so, via the intents. The application must declare
+an intent in its manifest for the action `SHARING`. The doctype of the intent
+must be the same as the doctype of the first rule of the sharing. In the
+redirect URL, the query string will have a `sharing` parameter with the
+sharing ID (but no intent parameter).
+
 ### Routes
 
 #### POST /sharings/
@@ -286,6 +296,7 @@ Content-Type: application/vnd.api+json
       "owner": true,
       "created_at": "2018-01-04T12:35:08Z",
       "updated_at": "2018-01-04T13:45:43Z",
+      "initial_number_of_files_to_sync": 42,
       "members": [
         {
           "status": "owner",
@@ -599,7 +610,7 @@ Content-Type: application/vnd.api+json
       "public_name": "Bob",
       "state": "eiJ3iepoaihohz1Y",
       "client": {...},
-      "access_token": "uia7b85928e5cf"
+      "access_token": {...}
     }
   }
 }
@@ -619,15 +630,17 @@ Content-Type: application/vnd.api+json
     "id": "ce8835a061d0ef68947afe69a0046722",
     "attributes": {
       "client": {...},
-      "access_token": "ui77bd4670fbd3"
+      "access_token": {...}
     }
   }
 }
 ```
 
-### POST /sharings/:sharing-id/recipient
+### POST /sharings/:sharing-id/recipients
 
-This route allow to the sharer to add a new recipient to a sharing.
+This route allows the sharer to add new recipients to a sharing. It can also
+be used by a recipient when the sharing has `open_sharing` set to true if the
+recipient doesn't have the `read_only` flag
 
 #### Request
 
@@ -640,14 +653,22 @@ Content-Type: application/vnd.api+json
 ```json
 {
   "data": {
-    "type": "io.cozy.sharings.sharings",
+    "type": "io.cozy.sharings",
     "id": "ce8835a061d0ef68947afe69a0046722",
     "relationships": {
       "recipients": {
         "data": [
           {
             "id": "ce7b1dfbd460039159f228298a29b2aa",
-            "type": "io.cozy.contacts"
+            "type": "io.cozy.contacts",
+          }
+        ]
+      },
+      "read_only_recipients": {
+        "data": [
+          {
+            "id": "e15384a1223ae2501cc1c4fa94008ea0",
+            "type": "io.cozy.contacts",
           }
         ]
       }
@@ -694,7 +715,13 @@ Content-Type: application/vnd.api+json
         {
           "status": "pending",
           "name": "Charlie",
-          "email": "charlie@example.net"
+          "email": "charlie@example.net",
+        },
+        {
+          "status": "pending",
+          "name": "Dave",
+          "email": "dave@example.net",
+          "read_only": true
         }
       ],
       "rules": [
@@ -726,6 +753,50 @@ Content-Type: application/vnd.api+json
       "self": "/sharings/ce8835a061d0ef68947afe69a0046722"
     }
   }
+}
+```
+
+### POST /sharings/:sharing-id/recipients/delegated
+
+This is an internal route for the stack. It is called by the recipient cozy on
+the owner cozy to add recipients to the sharing (`open_sharing: true` only).
+
+#### Request
+
+```http
+POST /sharings/ce8835a061d0ef68947afe69a0046722/recipients/delegated HTTP/1.1
+Host: alice.example.net
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": {
+    "type": "io.cozy.sharings",
+    "id": "ce8835a061d0ef68947afe69a0046722",
+    "relationships": {
+      "recipients": {
+        "data": [
+          {
+            "email": "dave@example.net"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "dave@example.net": "uS6wN7fTYaLZ-GdC_P6UWA"
 }
 ```
 
@@ -761,9 +832,122 @@ Content-Type: application/vnd.api+json
       "status": "ready",
       "name": "Charlie",
       "public_name": "Charlie",
-      "email": "charlie@example.net"
+      "email": "charlie@example.net",
+    },
+    {
+      "status": "pending",
+      "name": "Dave",
+      "email": "dave@example.net",
+      "read_only": true
     }
   ]
+}
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### POST /sharings/:sharing-id/recipients/:index/readonly
+
+This route is used to add the read-only flag on a recipient of a sharing.
+
+**Note**: 0 is not accepted for `index`, as it is the sharer him-self.
+
+##### Request
+
+```http
+POST /sharings/ce8835a061d0ef68947afe69a0046722/recipients/3/readonly HTTP/1.1
+Host: alice.example.net
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### POST /sharings/:sharing-id/recipients/self/readonly
+
+This is an internal route for the stack. It's used to inform the recipient's
+cozy that it is no longer in read-write mode. It also gives it an access token
+with a short validity (1 hour) to let it try to synchronize its last changes
+before going to read-only mode.
+
+#### Request
+
+```http
+POST /sharings/ce8835a061d0ef68947afe69a0046722/recipients/self/readonly HTTP/1.1
+Host: bob.example.net
+Authorization: Bearer ...
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": {
+    "type": "io.cozy.sharings.answer",
+    "id": "4dadbcae3f2d7a982e1b308eea000751",
+    "attributes": {
+      "client": {...},
+      "access_token": {...}
+    }
+  }
+}
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### DELETE /sharings/:sharing-id/recipients/:index/readonly
+
+This route is used to remove the read-only flag on a recipient of a sharing.
+
+**Note**: 0 is not accepted for `index`, as it is the sharer him-self.
+
+##### Request
+
+```http
+DELETE /sharings/ce8835a061d0ef68947afe69a0046722/recipients/3/readonly HTTP/1.1
+Host: alice.example.net
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### DELETE /sharings/:sharing-id/recipients/self/readonly
+
+This is an internal route for the stack. It's used to inform the recipient's
+cozy that it is no longer in read-only mode, and to give it the credentials
+for sending its updates.
+
+#### Request
+
+```http
+DELETE /sharings/ce8835a061d0ef68947afe69a0046722/recipients/self/readonly HTTP/1.1
+Host: bob.example.net
+Authorization: Bearer ...
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": {
+    "type": "io.cozy.sharings.answer",
+    "id": "4dadbcae3f2d7a982e1b308eea000751",
+    "attributes": {
+      "client": {...},
+      "access_token": {...}
+    }
+  }
 }
 ```
 
@@ -874,7 +1058,7 @@ HTTP/1.1 204 No Content
 
 This endpoint is used by the sharing replicator of the stack to know which
 documents must be sent to the other cozy. It is inspired by
-http://docs.couchdb.org/en/2.1.1/api/database/misc.html#db-revs-diff.
+http://docs.couchdb.org/en/stable/api/database/misc.html#db-revs-diff.
 
 #### Request
 
@@ -918,7 +1102,7 @@ Content-Type: application/json
 
 This endpoint is used by the sharing replicator of the stack to send
 documents in a bulk to the other cozy. It is inspired by
-http://docs.couchdb.org/en/2.1.1/api/database/bulk-api.html#db-bulk-docs.
+http://docs.couchdb.org/en/stable/api/database/bulk-api.html#db-bulk-docs.
 
 **Note**: we force `new_edits` to `false`.
 
@@ -1083,4 +1267,44 @@ Authorization: Bearer ...
 
 ```http
 HTTP/1.1 204 No Content
+```
+
+### DELETE /sharings/:sharing-id/initial
+
+This internal route is used by the sharer to inform a recipient's cozy that
+the initial sync is finished.
+
+```http
+DELETE /sharings/ce8835a061d0ef68947afe69a0046722/initial HTTP/1.1
+Host: bob.example.net
+Authorization: Bearer ...
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+## Real-time via websockets
+
+You can subscribe to the [realtime](realtime.md) API for the normal doctypes,
+but also for a special `io.cozy.sharings.initial-sync` doctype. For this
+doctype, you can give the id of a sharing and you will be notified when a file
+will be received during the initial synchronisation (`UPDATED`), and when the
+sync will be done (`DELETED`).
+
+### Example
+
+```
+client > {"method": "AUTH",
+          "payload": "xxAppOrAuthTokenxx="}
+client > {"method": "SUBSCRIBE",
+          "payload": {"type": "io.cozy.sharings.initial-sync", "id": "ce8835a061d0ef68947afe69a0046722"}
+server > {"event": "UPDATED",
+          "payload": {"id": "ce8835a061d0ef68947afe69a0046722", "type": "io.cozy.sharings.initial-sync", "doc": {"count": 12}}}
+server > {"event": "UPDATED",
+          "payload": {"id": "ce8835a061d0ef68947afe69a0046722", "type": "io.cozy.sharings.initial-sync", "doc": {"count": 13}}}
+server > {"event": "DELETED",
+          "payload": {"id": "ce8835a061d0ef68947afe69a0046722", "type": "io.cozy.sharings.initial-sync"}}
 ```

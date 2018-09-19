@@ -22,7 +22,6 @@ import (
 
 var flagAllowRoot bool
 var flagAppdirs []string
-var flagDisableCSP bool
 var flagDevMode bool
 
 // serveCmd represents the serve command
@@ -57,13 +56,6 @@ example), you can use the --appdir flag like this:
 
 		if flagDevMode {
 			config.BuildMode = config.ModeDev
-		}
-
-		if flagDisableCSP {
-			if !config.IsDevRelease() {
-				return errors.New("Using --disable-csp is allowed only for development")
-			}
-			config.GetConfig().CSPDisabled = true
 		}
 
 		var apps map[string]string
@@ -154,9 +146,6 @@ func init() {
 	flags.String("couchdb-url", "http://localhost:5984/", "CouchDB URL")
 	checkNoErr(viper.BindPFlag("couchdb.url", flags.Lookup("couchdb-url")))
 
-	flags.String("cache-url", "", "URL for the cache, redis or in-memory")
-	checkNoErr(viper.BindPFlag("cache.url", flags.Lookup("cache-url")))
-
 	flags.String("lock-url", "", "URL for the locks, redis or in-memory")
 	checkNoErr(viper.BindPFlag("lock.url", flags.Lookup("lock-url")))
 
@@ -218,7 +207,8 @@ func init() {
 	flags.BoolVar(&flagAllowRoot, "allow-root", false, "Allow to start as root (disabled by default)")
 	flags.StringSliceVar(&flagAppdirs, "appdir", nil, "Mount a directory as the 'app' application")
 
-	flags.BoolVar(&flagDisableCSP, "disable-csp", false, "Disable the Content Security Policy (only available for development)")
+	flags.Bool("disable-csp", false, "Disable the Content Security Policy (only available for development)")
+	checkNoErr(viper.BindPFlag("disable_csp", flags.Lookup("disable-csp")))
 
 	flags.String("csp-whitelist", "", "Whitelisted domains for the default allowed origins of the Content Secury Policy")
 	checkNoErr(viper.BindPFlag("csp_whitelist", flags.Lookup("csp-whitelist")))

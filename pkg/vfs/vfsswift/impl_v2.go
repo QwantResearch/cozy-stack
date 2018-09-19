@@ -144,17 +144,14 @@ func (sfs *swiftVFSV2) Delete() error {
 	if err1 != nil {
 		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
 			sfs.container, err1)
-		return err1
 	}
 	if err2 != nil {
 		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
 			sfs.dataContainer, err2)
-		return err2
 	}
 	if err3 != nil {
 		sfs.log.Errorf("Could not mark container %q as to-be-deleted: %s",
 			sfs.version, err3)
-		return err3
 	}
 	var errm error
 	if err := sfs.deleteContainer(sfs.container); err != nil {
@@ -294,7 +291,7 @@ func (sfs *swiftVFSV2) CreateFile(newdoc, olddoc *vfs.FileDoc) (vfs.File, error)
 	f, err := sfs.c.ObjectCreate(
 		sfs.container,
 		objName,
-		hash != "",
+		true,
 		hash,
 		newdoc.Mime,
 		objMeta.ObjectHeaders(),
@@ -377,6 +374,9 @@ func (sfs *swiftVFSV2) DestroyFile(doc *vfs.FileDoc) error {
 	defer sfs.mu.Unlock()
 	diskUsage, _ := sfs.Indexer.DiskUsage()
 	err := sfs.Indexer.DeleteFileDoc(doc)
+	if err == nil {
+		err = sfs.c.ObjectDelete(sfs.container, MakeObjectName(doc.DocID))
+	}
 	if err == nil {
 		vfs.DiskQuotaAfterDestroy(sfs, diskUsage, doc.ByteSize)
 	}
@@ -703,7 +703,7 @@ func (f *swiftFileCreationV2) Close() (err error) {
 			// on the container and the old object should be restored.
 			f.fs.c.ObjectDelete(f.fs.container, f.name) // #nosec
 
-			// If an error has occured that is not due to the index update, we should
+			// If an error has occurred that is not due to the index update, we should
 			// delete the file from the index.
 			_, isCouchErr := couchdb.IsCouchError(err)
 			if !isCouchErr && f.olddoc == nil {
@@ -726,6 +726,10 @@ func (f *swiftFileCreationV2) Close() (err error) {
 	}
 
 	newdoc, olddoc, written := f.newdoc, f.olddoc, f.w
+	if olddoc == nil {
+		olddoc = newdoc.Clone().(*vfs.FileDoc)
+	}
+
 	if f.meta != nil {
 		if errc := (*f.meta).Close(); errc == nil {
 			newdoc.Metadata = (*f.meta).Result()
@@ -771,11 +775,8 @@ func (f *swiftFileCreationV2) Close() (err error) {
 	// The document is already added to the index when closing the file creation
 	// handler. When updating the content of the document with the final
 	// informations (size, md5, ...) we can reuse the same document as olddoc.
-	if olddoc == nil || !olddoc.Trashed {
+	if f.olddoc == nil || !f.olddoc.Trashed {
 		newdoc.Trashed = false
-	}
-	if olddoc == nil {
-		olddoc = newdoc.Clone().(*vfs.FileDoc)
 	}
 	lockerr := f.fs.mu.Lock()
 	if lockerr != nil {

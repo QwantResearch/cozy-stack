@@ -140,14 +140,20 @@ func (t *TriggerInfos) Clone() couchdb.Doc {
 		t.Message = make([]byte, len(tmp))
 		copy(t.Message[:], tmp)
 	}
+	if t.CurrentState != nil {
+		tmp := *t.CurrentState
+		cloned.CurrentState = &tmp
+	}
 	return &cloned
 }
 
 // JobRequest returns a job request associated with the scheduler informations.
 func (t *TriggerInfos) JobRequest() *JobRequest {
+	trigger, _ := fromTriggerInfos(t)
 	return &JobRequest{
 		WorkerType: t.WorkerType,
 		TriggerID:  t.ID(),
+		Trigger:    trigger,
 		Message:    t.Message,
 		Options:    t.Options,
 	}
@@ -227,8 +233,11 @@ func GetTriggerState(t Trigger) (*TriggerState, error) {
 		case Done:
 			state.LastSuccess = startedAt
 			state.LastSuccessfulJobID = j.ID()
+		default:
+			// skip any job that is not done or errored
+			continue
 		}
-		if j.Manual && (j.State == Done || j.State == Errored) {
+		if j.Manual {
 			state.LastManualExecution = startedAt
 			state.LastManualJobID = j.ID()
 		}

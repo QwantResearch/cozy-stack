@@ -16,8 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/oauth"
-
-	multierror "github.com/hashicorp/go-multierror"
+	"github.com/sirupsen/logrus"
 
 	fcm "github.com/appleboy/go-fcm"
 
@@ -36,7 +35,7 @@ func init() {
 	jobs.AddWorker(&jobs.WorkerConfig{
 		WorkerType:   "push",
 		Concurrency:  runtime.NumCPU(),
-		MaxExecCount: 2,
+		MaxExecCount: 1,
 		Timeout:      10 * time.Second,
 		WorkerInit:   Init,
 		WorkerFunc:   Worker,
@@ -120,32 +119,36 @@ func Worker(ctx *jobs.WorkerContext) error {
 	if err != nil {
 		return err
 	}
-	var errm error
 	for _, c := range cs {
 		if c.NotificationDeviceToken != "" {
-			err = push(ctx, c.NotificationPlatform, c.NotificationDeviceToken, &msg)
+			err = push(ctx, c, &msg)
 			if err != nil {
-				errm = multierror.Append(errm, err)
+				ctx.Logger().
+					WithFields(logrus.Fields{
+						"device_id":       c.ID(),
+						"device_platform": c.NotificationPlatform,
+					}).
+					Warnf("could not send notification on device: %s", err)
 			}
 		}
 	}
-	return errm
+	return nil
 }
 
-func push(ctx *jobs.WorkerContext, platform, deviceToken string, msg *Message) error {
-	switch platform {
+func push(ctx *jobs.WorkerContext, c *oauth.Client, msg *Message) error {
+	switch c.NotificationPlatform {
 	case oauth.PlatformFirebase, "android", "ios":
-		return pushToFirebase(ctx, deviceToken, msg)
+		return pushToFirebase(ctx, c, msg)
 	case oauth.PlatformAPNS:
-		return pushToAPNS(ctx, deviceToken, msg)
+		return pushToAPNS(ctx, c, msg)
 	default:
-		return fmt.Errorf("notifications: unknown platform %q", platform)
+		return fmt.Errorf("notifications: unknown platform %q", c.NotificationPlatform)
 	}
 }
 
 // Firebase Cloud Messaging HTTP Protocol
 // https://firebase.google.com/docs/cloud-messaging/http-server-ref
-func pushToFirebase(ctx *jobs.WorkerContext, deviceToken string, msg *Message) error {
+func pushToFirebase(ctx *jobs.WorkerContext, c *oauth.Client, msg *Message) error {
 	if fcmClient == nil {
 		ctx.Logger().Warn("Could not send android notification: not configured")
 		return nil
@@ -171,7 +174,7 @@ func pushToFirebase(ctx *jobs.WorkerContext, deviceToken string, msg *Message) e
 	}
 
 	notification := &fcm.Message{
-		To:               deviceToken,
+		To:               c.NotificationDeviceToken,
 		Priority:         priority,
 		ContentAvailable: true,
 		Notification: &fcm.Notification{
@@ -202,21 +205,15 @@ func pushToFirebase(ctx *jobs.WorkerContext, deviceToken string, msg *Message) e
 		return nil
 	}
 
-	var errm error
 	for _, result := range res.Results {
 		if err = result.Error; err != nil {
-			if errm != nil {
-				errm = multierror.Append(errm, err)
-			} else {
-				errm = err
-			}
+			return err
 		}
 	}
-
-	return errm
+	return nil
 }
 
-func pushToAPNS(ctx *jobs.WorkerContext, deviceToken string, msg *Message) error {
+func pushToAPNS(ctx *jobs.WorkerContext, c *oauth.Client, msg *Message) error {
 	if iosClient == nil {
 		ctx.Logger().Warn("Could not send iOS notification: not configured")
 		return nil
@@ -239,7 +236,7 @@ func pushToAPNS(ctx *jobs.WorkerContext, deviceToken string, msg *Message) error
 	}
 
 	notification := &apns.Notification{
-		DeviceToken: deviceToken,
+		DeviceToken: c.NotificationDeviceToken,
 		Payload:     payload,
 		Priority:    priority,
 		CollapseID:  hex.EncodeToString(hashSource(msg.Source)), // CollapseID should not exceed 64 bytes

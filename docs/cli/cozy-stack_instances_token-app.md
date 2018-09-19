@@ -7,13 +7,14 @@ Generate a new application token
 Generate a new application token
 
 ```
-cozy-stack instances token-app [domain] [slug] [flags]
+cozy-stack instances token-app <domain> <slug> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for token-app
+      --expire duration   Make the token expires in this amount of time
+  -h, --help              help for token-app
 ```
 
 ### Options inherited from parent commands

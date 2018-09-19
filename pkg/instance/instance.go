@@ -19,7 +19,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/hooks"
 	"github.com/cozy/cozy-stack/pkg/i18n"
@@ -27,9 +26,12 @@ import (
 	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/permissions"
+	"github.com/cozy/cozy-stack/pkg/realtime"
+	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/pkg/vfs"
 	"github.com/cozy/cozy-stack/pkg/vfs/vfsafero"
 	"github.com/cozy/cozy-stack/pkg/vfs/vfsswift"
+	"github.com/cozy/cozy-stack/pkg/ws"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/sirupsen/logrus"
 	jwt "gopkg.in/dgrijalva/jwt-go.v3"
@@ -71,7 +73,7 @@ var (
 	ErrContextNotFound = errors.New("Context not found")
 	// ErrResetAlreadyRequested is returned when a passphrase reset token is already set and valid
 	ErrResetAlreadyRequested = errors.New("The passphrase reset has already been requested")
-	// ErrUnknownAuthMode is returned when an unknwon authentication mode is
+	// ErrUnknownAuthMode is returned when an unknown authentication mode is
 	// used.
 	ErrUnknownAuthMode = errors.New("Unknown authentication mode")
 	// ErrBadTOSVersion is returned when a malformed TOS version is provided.
@@ -82,18 +84,20 @@ var (
 // like the domain, the locale or the access to the databases and files storage
 // It is a couchdb.Doc to be persisted in couchdb.
 type Instance struct {
-	DocID        string   `json:"_id,omitempty"`        // couchdb _id
-	DocRev       string   `json:"_rev,omitempty"`       // couchdb _rev
-	Domain       string   `json:"domain"`               // The main DNS domain, like example.cozycloud.cc
-	Prefix       string   `json:"prefix,omitempty"`     // Possible database prefix
-	Locale       string   `json:"locale"`               // The locale used on the server
-	UUID         string   `json:"uuid,omitempty"`       // UUID associated with the instance
-	ContextName  string   `json:"context,omitempty"`    // The context attached to the instance
-	TOSSigned    string   `json:"tos,omitempty"`        // Terms of Service signed version
-	TOSLatest    string   `json:"tos_latest,omitempty"` // Terms of Service latest version
-	AuthMode     AuthMode `json:"auth_mode,omitempty"`
-	NoAutoUpdate bool     `json:"no_auto_update,omitempty"` // Whether or not the instance has auto updates for its applications
-	Dev          bool     `json:"dev,omitempty"`            // Whether or not the instance is for development
+	DocID         string   `json:"_id,omitempty"`  // couchdb _id
+	DocRev        string   `json:"_rev,omitempty"` // couchdb _rev
+	Domain        string   `json:"domain"`         // The main DNS domain, like example.cozycloud.cc
+	DomainAliases []string `json:"domain_aliases,omitempty"`
+	Prefix        string   `json:"prefix,omitempty"`     // Possible database prefix
+	Locale        string   `json:"locale"`               // The locale used on the server
+	UUID          string   `json:"uuid,omitempty"`       // UUID associated with the instance
+	ContextName   string   `json:"context,omitempty"`    // The context attached to the instance
+	TOSSigned     string   `json:"tos,omitempty"`        // Terms of Service signed version
+	TOSLatest     string   `json:"tos_latest,omitempty"` // Terms of Service latest version
+	AuthMode      AuthMode `json:"auth_mode,omitempty"`
+	Blocked       bool     `json:"blocked,omitempty"`        // Whether or not the instance is blocked
+	NoAutoUpdate  bool     `json:"no_auto_update,omitempty"` // Whether or not the instance has auto updates for its applications
+	Dev           bool     `json:"dev,omitempty"`            // Whether or not the instance is for development
 
 	OnboardingFinished bool  `json:"onboarding_finished,omitempty"` // Whether or not the onboarding is complete.
 	BytesDiskQuota     int64 `json:"disk_quota,string,omitempty"`   // The total size in bytes allowed to the user
@@ -121,30 +125,34 @@ type Instance struct {
 	// CLISecret is used to authenticate request from the CLI
 	CLISecret []byte `json:"cli_secret,omitempty"`
 
-	vfs vfs.VFS
+	vfs              vfs.VFS
+	managerURL       *url.URL
+	contextualDomain string
 }
 
 // Options holds the parameters to create a new instance.
 type Options struct {
-	Domain       string
-	Locale       string
-	UUID         string
-	TOSSigned    string
-	TOSLatest    string
-	Timezone     string
-	ContextName  string
-	Email        string
-	PublicName   string
-	Settings     string
-	SettingsObj  *couchdb.JSONDoc
-	AuthMode     string
-	Passphrase   string
-	SwiftCluster int
-	DiskQuota    int64
-	Apps         []string
-	AutoUpdate   *bool
-	Debug        *bool
-	Dev          bool
+	Domain        string
+	DomainAliases []string
+	Locale        string
+	UUID          string
+	TOSSigned     string
+	TOSLatest     string
+	Timezone      string
+	ContextName   string
+	Email         string
+	PublicName    string
+	Settings      string
+	SettingsObj   *couchdb.JSONDoc
+	AuthMode      string
+	Passphrase    string
+	SwiftCluster  int
+	DiskQuota     int64
+	Apps          []string
+	AutoUpdate    *bool
+	Debug         *bool
+	Blocked       *bool
+	Dev           bool
 
 	OnboardingFinished *bool
 }
@@ -167,6 +175,9 @@ func (i *Instance) SetRev(v string) { i.DocRev = v }
 // Clone implements couchdb.Doc
 func (i *Instance) Clone() couchdb.Doc {
 	cloned := *i
+
+	cloned.DomainAliases = make([]string, len(i.DomainAliases))
+	copy(cloned.DomainAliases, i.DomainAliases)
 
 	cloned.PassphraseHash = make([]byte, len(i.PassphraseHash))
 	copy(cloned.PassphraseHash, i.PassphraseHash)
@@ -311,7 +322,7 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 		return vfsafero.NewThumbsFs(baseFS)
 	case config.SchemeSwift:
 		if i.SwiftCluster > 0 {
-			return vfsswift.NewThumbsFsV2(config.GetSwiftConnection(), i.Domain)
+			return vfsswift.NewThumbsFsV2(config.GetSwiftConnection(), i)
 		}
 		return vfsswift.NewThumbsFs(config.GetSwiftConnection(), i.Domain)
 	default:
@@ -341,8 +352,20 @@ func (i *Instance) SettingsEMail() (string, error) {
 	return email, nil
 }
 
-// Context returns the map from the config that matches the context of this instance
-func (i *Instance) Context() (map[string]interface{}, error) {
+// SettingsPublicName returns the public name defined in the settings of this
+// instance.
+func (i *Instance) SettingsPublicName() (string, error) {
+	settings, err := i.SettingsDocument()
+	if err != nil {
+		return "", err
+	}
+	email, _ := settings.M["public_name"].(string)
+	return email, nil
+}
+
+// SettingsContext returns the map from the config that matches the context of
+// this instance
+func (i *Instance) SettingsContext() (map[string]interface{}, error) {
 	ctx := i.ContextName
 	if ctx == "" {
 		ctx = "default"
@@ -376,6 +399,14 @@ func (i *Instance) DiskQuota() int64 {
 	return i.BytesDiskQuota
 }
 
+// WithContextualDomain the current instance context with the given hostname.
+func (i *Instance) WithContextualDomain(domain string) *Instance {
+	if i.HasDomain(domain) {
+		i.contextualDomain = domain
+	}
+	return i
+}
+
 // Scheme returns the scheme used for URLs. It is https by default and http
 // for development instances.
 func (i *Instance) Scheme() string {
@@ -385,14 +416,37 @@ func (i *Instance) Scheme() string {
 	return "https"
 }
 
+// ContextualDomain returns the domain with regard to the current domain
+// request.
+func (i *Instance) ContextualDomain() string {
+	if i.contextualDomain != "" {
+		return i.contextualDomain
+	}
+	return i.Domain
+}
+
+// HasDomain returns whether or not the given domain name is owned by this
+// instance, as part of its main domain name or its aliases.
+func (i *Instance) HasDomain(domain string) bool {
+	if domain == i.Domain {
+		return true
+	}
+	for _, alias := range i.DomainAliases {
+		if domain == alias {
+			return true
+		}
+	}
+	return false
+}
+
 // SubDomain returns the full url for a subdomain of this instance
 // useful with apps slugs
 func (i *Instance) SubDomain(s string) *url.URL {
-	var domain string
+	domain := i.ContextualDomain()
 	if config.GetConfig().Subdomains == config.NestedSubdomains {
-		domain = s + "." + i.Domain
+		domain = s + "." + domain
 	} else {
-		parts := strings.SplitN(i.Domain, ".", 2)
+		parts := strings.SplitN(domain, ".", 2)
 		domain = parts[0] + "-" + s + "." + parts[1]
 	}
 	return &url.URL{
@@ -406,7 +460,7 @@ func (i *Instance) SubDomain(s string) *url.URL {
 func (i *Instance) FromURL(u *url.URL) string {
 	u2 := url.URL{
 		Scheme:   i.Scheme(),
-		Host:     i.Domain,
+		Host:     i.ContextualDomain(),
 		Path:     u.Path,
 		RawQuery: u.RawQuery,
 		Fragment: u.Fragment,
@@ -422,59 +476,11 @@ func (i *Instance) PageURL(path string, queries url.Values) string {
 	}
 	u := url.URL{
 		Scheme:   i.Scheme(),
-		Host:     i.Domain,
+		Host:     i.ContextualDomain(),
 		Path:     path,
 		RawQuery: query,
 	}
 	return u.String()
-}
-
-// ManagerURLKind is an enum type for the different kinds of manager URLs.
-type ManagerURLKind int
-
-const (
-	// ManagerTOSURL is the kind for changes of TOS URL.
-	ManagerTOSURL ManagerURLKind = iota
-	// ManagerPremiumURL is the kind for changing the account type of the
-	// instance.
-	ManagerPremiumURL
-)
-
-// ManagerURL returns an external string for the given ManagerURL kind.
-func (i *Instance) ManagerURL(k ManagerURLKind) (s string, ok bool) {
-	defer func() {
-		if !ok {
-			s = i.PageURL("/manager_url_is_not_specified", nil)
-		}
-	}()
-	if i.UUID == "" {
-		return
-	}
-	ctx, err := i.Context()
-	if err != nil {
-		return
-	}
-	managerURL, ok := ctx["manager_url"].(string)
-	if !ok {
-		return
-	}
-	u, err := url.Parse(managerURL)
-	if err != nil {
-		return
-	}
-	var path string
-	switch k {
-	// TODO: we may want to rely on the contexts to avoid hardcoding the path
-	// values of these kinds.
-	case ManagerPremiumURL:
-		path = fmt.Sprintf("/cozy/accounts/%s", url.PathEscape(i.UUID))
-	case ManagerTOSURL:
-		path = fmt.Sprintf("/cozy/instances/%s/tos", url.PathEscape(i.UUID))
-	}
-	u.Path = path
-	s = u.String()
-	ok = true
-	return
 }
 
 // PublicName returns the settings' public name or a default one if missing
@@ -493,7 +499,7 @@ func (i *Instance) PublicName() (string, error) {
 }
 
 func (i *Instance) redirection(key, defaultSlug string) *url.URL {
-	context, err := i.Context()
+	context, err := i.SettingsContext()
 	if err != nil {
 		return i.SubDomain(defaultSlug)
 	}
@@ -529,15 +535,17 @@ func (i *Instance) OnboardedRedirection() *url.URL {
 }
 
 func (i *Instance) installApp(slug string) error {
-	source, ok := consts.AppsRegistry[slug]
-	if !ok {
-		return errors.New("Unknown app")
+	source := "registry://" + slug + "/stable"
+	registries, err := i.Registries()
+	if err != nil {
+		return err
 	}
 	inst, err := apps.NewInstaller(i, i.AppsCopier(apps.Webapp), &apps.InstallerOptions{
-		Operation: apps.Install,
-		Type:      apps.Webapp,
-		SourceURL: source,
-		Slug:      slug,
+		Operation:  apps.Install,
+		Type:       apps.Webapp,
+		SourceURL:  source,
+		Slug:       slug,
+		Registries: registries,
 	})
 	if err != nil {
 		return err
@@ -551,7 +559,6 @@ func (i *Instance) update() error {
 		i.Logger().Errorf("Could not update: %s", err.Error())
 		return err
 	}
-	getCache().Revoke(i.Domain)
 	return nil
 }
 
@@ -635,6 +642,10 @@ func CreateWithoutHooks(opts *Options) (*Instance, error) {
 	prefix := sha256.Sum256([]byte(domain))
 	i := new(Instance)
 	i.Domain = domain
+	i.DomainAliases, err = checkAliases(i, opts.DomainAliases)
+	if err != nil {
+		return nil, err
+	}
 	i.Prefix = "cozy" + hex.EncodeToString(prefix[:16])
 	i.Locale = locale
 	i.UUID = opts.UUID
@@ -678,15 +689,6 @@ func CreateWithoutHooks(opts *Options) (*Instance, error) {
 
 	if autoUpdate := opts.AutoUpdate; autoUpdate != nil {
 		i.NoAutoUpdate = !(*opts.AutoUpdate)
-	}
-
-	if err := couchdb.CreateDB(couchdb.GlobalDB, consts.Instances); !couchdb.IsFileExists(err) {
-		if err != nil {
-			return nil, err
-		}
-		if err := couchdb.DefineIndexes(couchdb.GlobalDB, consts.GlobalIndexes); err != nil {
-			return nil, err
-		}
 	}
 
 	if err := couchdb.CreateDoc(couchdb.GlobalDB, i); err != nil {
@@ -753,15 +755,9 @@ func Get(domain string) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	cache := getCache()
-
-	i := cache.Get(domain)
-	if i == nil {
-		i, err = getFromCouch(domain)
-		if err != nil {
-			return nil, err
-		}
-		cache.Set(domain, i)
+	i, err := getFromCouch(domain)
+	if err != nil {
+		return nil, err
 	}
 
 	// This retry-loop handles the probability to hit an Update conflict from
@@ -897,6 +893,8 @@ func Patch(i *Instance, opts *Options) error {
 	opts.Domain = i.Domain
 	settings, settingsUpdate := buildSettings(opts)
 
+	clouderyChanges := make(map[string]interface{})
+
 	for {
 		var err error
 		if i == nil {
@@ -909,6 +907,20 @@ func Patch(i *Instance, opts *Options) error {
 		needUpdate := false
 		if opts.Locale != "" && opts.Locale != i.Locale {
 			i.Locale = opts.Locale
+			clouderyChanges["locale"] = i.Locale
+			needUpdate = true
+		}
+
+		if opts.Blocked != nil && *opts.Blocked != i.Blocked {
+			i.Blocked = *opts.Blocked
+			needUpdate = true
+		}
+
+		if aliases := opts.DomainAliases; aliases != nil {
+			i.DomainAliases, err = checkAliases(i, aliases)
+			if err != nil {
+				return err
+			}
 			needUpdate = true
 		}
 
@@ -959,7 +971,7 @@ func Patch(i *Instance, opts *Options) error {
 				return ErrBadTOSVersion
 			}
 			if i.TOSLatest != opts.TOSLatest {
-				if notSigned, _ := i.CheckTOSSigned(opts.TOSLatest); notSigned {
+				if i.CheckTOSNotSigned(opts.TOSLatest) {
 					i.TOSLatest = opts.TOSLatest
 					needUpdate = true
 				}
@@ -972,7 +984,7 @@ func Patch(i *Instance, opts *Options) error {
 			}
 			if i.TOSSigned != opts.TOSSigned {
 				i.TOSSigned = opts.TOSSigned
-				if notSigned, _ := i.CheckTOSSigned(); !notSigned {
+				if !i.CheckTOSNotSigned() {
 					i.TOSLatest = ""
 				}
 				needUpdate = true
@@ -995,6 +1007,20 @@ func Patch(i *Instance, opts *Options) error {
 	}
 
 	if settingsUpdate {
+		oldSettings, err := i.SettingsDocument()
+		if err != nil {
+			old := oldSettings.M["email"]
+			new := settings.M["email"]
+			if old != new {
+				clouderyChanges["email"] = new
+			}
+			old = oldSettings.M["public_name"]
+			new = settings.M["public_name"]
+			if old != new {
+				clouderyChanges["public_name"] = new
+			}
+		}
+
 		if err := couchdb.UpdateDoc(i, settings); err != nil {
 			return err
 		}
@@ -1012,31 +1038,85 @@ func Patch(i *Instance, opts *Options) error {
 		}
 	}
 
+	if len(clouderyChanges) > 0 {
+		cloudery := i.getClouderyClient()
+		if cloudery != nil {
+			url := fmt.Sprintf("/api/v1/instances/%s", url.PathEscape(i.UUID))
+			cloudery.Put(url, clouderyChanges, nil)
+		}
+	}
+
 	return nil
 }
 
-func getFromCouch(domain string) (*Instance, error) {
-	var instances []*Instance
-	req := &couchdb.FindRequest{
-		UseIndex: "by-domain",
-		Selector: mango.Equal("domain", domain),
-		Limit:    1,
+func (i *Instance) getClouderyClient() *ws.OAuthRestJSONClient {
+	context, err := i.SettingsContext()
+	if err != nil {
+		return nil
 	}
-	err := couchdb.FindDocs(couchdb.GlobalDB, consts.Instances, req, &instances)
+
+	baseURL, _ := context["manager_url"].(string)
+	token, _ := context["manager_token"].(string)
+	if baseURL == "" || token == "" {
+		return nil
+	}
+
+	cloudery := &ws.OAuthRestJSONClient{}
+	cloudery.Init(baseURL, token)
+	return cloudery
+}
+
+func checkAliases(i *Instance, aliases []string) ([]string, error) {
+	if aliases == nil {
+		return nil, nil
+	}
+	aliases = utils.UniqueStrings(aliases)
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		if alias == i.Domain {
+			return nil, ErrExists
+		}
+		i2, err := getFromCouch(alias)
+		if err != ErrNotFound {
+			if err != nil {
+				return nil, err
+			}
+			if i2.ID() != i.ID() {
+				return nil, ErrExists
+			}
+		}
+	}
+	return aliases, nil
+}
+
+func getFromCouch(domain string) (*Instance, error) {
+	var res couchdb.ViewResponse
+	err := couchdb.ExecView(couchdb.GlobalDB, consts.DomainAndAliasesView, &couchdb.ViewRequest{
+		Key:         domain,
+		IncludeDocs: true,
+		Limit:       1,
+	}, &res)
 	if couchdb.IsNoDatabaseError(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(instances) == 0 {
+	if len(res.Rows) == 0 {
 		return nil, ErrNotFound
 	}
-	i := instances[0]
-	if err = i.makeVFS(); err != nil {
+	inst := &Instance{}
+	err = json.Unmarshal(res.Rows[0].Doc, &inst)
+	if err != nil {
 		return nil, err
 	}
-	return i, nil
+	if err = inst.makeVFS(); err != nil {
+		return nil, err
+	}
+	return inst, nil
 }
 
 // Translate is used to translate a string to the locale used on this instance
@@ -1092,6 +1172,11 @@ func DestroyWithoutHooks(domain string) error {
 	if err != nil {
 		return err
 	}
+
+	// Deleting accounts manually to invoke the "account deletion hook" which may
+	// launch a worker in order to clean the account.
+	deleteAccounts(i)
+
 	sched := jobs.System()
 	triggers, err := sched.GetAllTriggers(i)
 	if err == nil {
@@ -1102,14 +1187,62 @@ func DestroyWithoutHooks(domain string) error {
 			}
 		}
 	}
-	defer getCache().Revoke(domain)
+
 	if err = couchdb.DeleteAllDBs(i); err != nil {
-		return err
+		i.Logger().Errorf("Could not delete all CouchDB databases: %s", err.Error())
 	}
+
 	if err = i.VFS().Delete(); err != nil {
 		i.Logger().Errorf("Could not delete VFS: %s", err.Error())
 	}
+
 	return couchdb.DeleteDoc(couchdb.GlobalDB, i)
+}
+
+func deleteAccounts(i *Instance) {
+	var accounts []*couchdb.JSONDoc
+	if err := couchdb.GetAllDocs(i, consts.Accounts, nil, &accounts); err != nil || len(accounts) == 0 {
+		return
+	}
+
+	ds := realtime.GetHub().Subscriber(i)
+	defer ds.Close()
+
+	accountsCount := 0
+	for _, account := range accounts {
+		account.Type = consts.Accounts
+		if err := couchdb.DeleteDoc(i, account); err == nil {
+			accountsCount++
+		}
+	}
+	if accountsCount == 0 {
+		return
+	}
+
+	if err := ds.Subscribe(consts.Jobs); err != nil {
+		return
+	}
+
+	timeout := time.After(1 * time.Minute)
+	for {
+		select {
+		case e := <-ds.Channel:
+			j, ok := e.Doc.(*couchdb.JSONDoc)
+			if ok {
+				deleted, _ := j.M["account_deleted"].(bool)
+				stateStr, _ := j.M["state"].(string)
+				state := jobs.State(stateStr)
+				if deleted && (state == jobs.Done || state == jobs.Errored) {
+					accountsCount--
+					if accountsCount == 0 {
+						return
+					}
+				}
+			}
+		case <-timeout:
+			return
+		}
+	}
 }
 
 func (i *Instance) registerPassphrase(pass, tok []byte) error {
@@ -1293,7 +1426,7 @@ func (i *Instance) CheckPassphrase(pass []byte) error {
 	return nil
 }
 
-// PickKey choose wich of the Instance keys to use depending on token audience
+// PickKey choose which of the Instance keys to use depending on token audience
 func (i *Instance) PickKey(audience string) ([]byte, error) {
 	switch audience {
 	case permissions.AppAudience,

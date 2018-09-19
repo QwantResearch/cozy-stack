@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -19,6 +20,8 @@ import (
 )
 
 var flagDomain string
+var flagDomainAliases []string
+var flagListFields []string
 var flagLocale string
 var flagTimezone string
 var flagEmail string
@@ -26,6 +29,7 @@ var flagPublicName string
 var flagSettings string
 var flagDiskQuota string
 var flagApps []string
+var flagBlocked bool
 var flagDev bool
 var flagPassphrase string
 var flagForce bool
@@ -35,6 +39,7 @@ var flagJSON bool
 var flagDirectory string
 var flagIncreaseQuota bool
 var flagForceRegistry bool
+var flagOnlyRegistry bool
 var flagSwiftCluster int
 var flagUUID string
 var flagTOSSigned string
@@ -42,10 +47,11 @@ var flagTOS string
 var flagTOSLatest string
 var flagContextName string
 var flagOnboardingFinished bool
+var flagExpire time.Duration
 
 // instanceCmdGroup represents the instances command
 var instanceCmdGroup = &cobra.Command{
-	Use:   "instances [command]",
+	Use:   "instances <command>",
 	Short: "Manage instances of a stack",
 	Long: `
 cozy-stack instances allows to manage the instances of this stack
@@ -62,16 +68,8 @@ create its CouchDB databases.
 	},
 }
 
-var cleanInstanceCmd = &cobra.Command{
-	Use:   "clean [domain]",
-	Short: "Clean badly removed instances",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.New("This command is deprecated")
-	},
-}
-
 var showInstanceCmd = &cobra.Command{
-	Use:   "show [domain]",
+	Use:   "show <domain>",
 	Short: "Show the instance of the specified domain",
 	Long: `
 cozy-stack instances show allows to show the instance on the cozy for a
@@ -97,8 +95,35 @@ given domain.
 	},
 }
 
+var showPrefixInstanceCmd = &cobra.Command{
+	Use:   "show-prefix <domain>",
+	Short: "Show the instance prefix of the specified domain",
+	Long: `
+cozy-stack instances show allows to show the instance prefix on the cozy for a
+given domain. The prefix is used for databases and VFS prefixing.
+`,
+	Example: "$ cozy-stack instances show-prefix cozy.tools:8080",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return cmd.Usage()
+		}
+		domain := args[0]
+		c := newAdminClient()
+		in, err := c.GetInstance(domain)
+		if err != nil {
+			return err
+		}
+		if in.Attrs.Prefix != "" {
+			fmt.Println(in.Attrs.Prefix)
+		} else {
+			fmt.Println(in.Attrs.Domain)
+		}
+		return nil
+	},
+}
+
 var addInstanceCmd = &cobra.Command{
-	Use:   "add [domain]",
+	Use:   "add <domain>",
 	Short: "Manage instances of a stack",
 	Long: `
 cozy-stack instances add allows to create an instance on the cozy for a
@@ -129,20 +154,21 @@ be used as the error message.
 		domain := args[0]
 		c := newAdminClient()
 		in, err := c.CreateInstance(&client.InstanceOptions{
-			Domain:       domain,
-			Locale:       flagLocale,
-			UUID:         flagUUID,
-			TOSSigned:    flagTOSSigned,
-			Timezone:     flagTimezone,
-			ContextName:  flagContextName,
-			Email:        flagEmail,
-			PublicName:   flagPublicName,
-			Settings:     flagSettings,
-			SwiftCluster: flagSwiftCluster,
-			DiskQuota:    diskQuota,
-			Apps:         flagApps,
-			Passphrase:   flagPassphrase,
-			Dev:          flagDev,
+			Domain:        domain,
+			DomainAliases: flagDomainAliases,
+			Locale:        flagLocale,
+			UUID:          flagUUID,
+			TOSSigned:     flagTOSSigned,
+			Timezone:      flagTimezone,
+			ContextName:   flagContextName,
+			Email:         flagEmail,
+			PublicName:    flagPublicName,
+			Settings:      flagSettings,
+			SwiftCluster:  flagSwiftCluster,
+			DiskQuota:     diskQuota,
+			Apps:          flagApps,
+			Passphrase:    flagPassphrase,
+			Dev:           flagDev,
 		})
 		if err != nil {
 			errPrintfln(
@@ -177,7 +203,7 @@ be used as the error message.
 }
 
 var modifyInstanceCmd = &cobra.Command{
-	Use:     "modify [domain]",
+	Use:     "modify <domain>",
 	Aliases: []string{"update"},
 	Short:   "Modify the instance properties",
 	Long: `
@@ -201,18 +227,22 @@ settings for a specified domain.
 		domain := args[0]
 		c := newAdminClient()
 		opts := &client.InstanceOptions{
-			Domain:       domain,
-			Locale:       flagLocale,
-			UUID:         flagUUID,
-			TOSSigned:    flagTOS,
-			TOSLatest:    flagTOSLatest,
-			Timezone:     flagTimezone,
-			ContextName:  flagContextName,
-			Email:        flagEmail,
-			PublicName:   flagPublicName,
-			Settings:     flagSettings,
-			SwiftCluster: flagSwiftCluster,
-			DiskQuota:    diskQuota,
+			Domain:        domain,
+			DomainAliases: flagDomainAliases,
+			Locale:        flagLocale,
+			UUID:          flagUUID,
+			TOSSigned:     flagTOS,
+			TOSLatest:     flagTOSLatest,
+			Timezone:      flagTimezone,
+			ContextName:   flagContextName,
+			Email:         flagEmail,
+			PublicName:    flagPublicName,
+			Settings:      flagSettings,
+			SwiftCluster:  flagSwiftCluster,
+			DiskQuota:     diskQuota,
+		}
+		if flag := cmd.Flag("blocked"); flag.Changed {
+			opts.Blocked = &flagBlocked
 		}
 		if flagOnboardingFinished {
 			opts.OnboardingFinished = &flagOnboardingFinished
@@ -233,7 +263,7 @@ settings for a specified domain.
 }
 
 var quotaInstanceCmd = &cobra.Command{
-	Use:   "set-disk-quota [domain] [disk-quota]",
+	Use:   "set-disk-quota <domain> <disk-quota>",
 	Short: "Change the disk-quota of the instance",
 	Long: `
 cozy-stack instances set-disk-quota allows to change the disk-quota of the
@@ -259,7 +289,7 @@ instance of the given domain. Set the quota to 0 to remove the quota.
 }
 
 var debugInstanceCmd = &cobra.Command{
-	Use:   "debug [domain] [true/false]",
+	Use:   "debug <domain> <true/false>",
 	Short: "Activate or deactivate debugging of the instance",
 	Long: `
 cozy-stack instances debug allows to activate or deactivate the debugging of a
@@ -296,19 +326,82 @@ by this server.
 		if err != nil {
 			return err
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		for _, i := range list {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\tv%d\n",
-				i.Attrs.Domain,
-				i.Attrs.Locale,
-				formatSize(i.Attrs.BytesDiskQuota),
-				formatDev(i.Attrs.Dev),
-				formatOnboarded(i),
-				i.Attrs.IndexViewsVersion,
-			)
+		if flagJSON {
+			if len(flagListFields) > 0 {
+				for _, inst := range list {
+					var values []interface{}
+					values, err = extractFields(inst.Attrs, flagListFields)
+					if err != nil {
+						return err
+					}
+					m := make(map[string]interface{}, len(flagListFields))
+					for i, fieldName := range flagListFields {
+						m[fieldName] = values[i]
+					}
+					if err = json.NewEncoder(os.Stdout).Encode(m); err != nil {
+						return err
+					}
+				}
+			} else {
+				for _, inst := range list {
+					if err = json.NewEncoder(os.Stdout).Encode(inst.Attrs); err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if len(flagListFields) > 0 {
+				format := strings.Repeat("%v\t", len(flagListFields))
+				format = format[:len(format)-1] + "\n"
+				for _, inst := range list {
+					var values []interface{}
+					values, err = extractFields(inst.Attrs, flagListFields)
+					if err != nil {
+						return err
+					}
+					fmt.Fprintf(w, format, values...)
+				}
+			} else {
+				for _, i := range list {
+					prefix := i.Attrs.Prefix
+					if prefix == "" {
+						prefix = i.Attrs.Domain
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\tv%d\t%s\n",
+						i.Attrs.Domain,
+						i.Attrs.Locale,
+						formatSize(i.Attrs.BytesDiskQuota),
+						formatDev(i.Attrs.Dev),
+						formatOnboarded(i),
+						i.Attrs.IndexViewsVersion,
+						prefix,
+					)
+				}
+			}
+			w.Flush()
 		}
-		return w.Flush()
+		return nil
 	},
+}
+
+func extractFields(data interface{}, fieldsNames []string) (values []interface{}, err error) {
+	var m map[string]interface{}
+	var b []byte
+	b, err = json.Marshal(data)
+	if err != nil {
+		return
+	}
+	if err = json.Unmarshal(b, &m); err != nil {
+		return
+	}
+	values = make([]interface{}, len(fieldsNames))
+	for i, fieldName := range fieldsNames {
+		if v, ok := m[fieldName]; ok {
+			values[i] = v
+		}
+	}
+	return
 }
 
 func formatSize(size int64) string {
@@ -336,7 +429,7 @@ func formatOnboarded(i *client.Instance) string {
 }
 
 var destroyInstanceCmd = &cobra.Command{
-	Use:   "destroy [domain]",
+	Use:   "destroy <domain>",
 	Short: "Remove instance",
 	Long: `
 cozy-stack instances destroy allows to remove an instance
@@ -376,7 +469,7 @@ Type again the domain to confirm: `, domain)
 		err := c.DestroyInstance(domain)
 		if err != nil {
 			errPrintfln(
-				"An error occured while destroying instance for domain %s", domain)
+				"An error occurred while destroying instance for domain %s", domain)
 			return err
 		}
 
@@ -386,7 +479,7 @@ Type again the domain to confirm: `, domain)
 }
 
 var fsckInstanceCmd = &cobra.Command{
-	Use:   "fsck [domain]",
+	Use:   "fsck <domain>",
 	Short: "Check and repair a vfs",
 	Long: `
 The cozy-stack fsck command checks that the files in the VFS are not
@@ -434,6 +527,7 @@ func appOrKonnectorTokenInstance(cmd *cobra.Command, args []string, appType stri
 		Domain:   args[0],
 		Subject:  args[1],
 		Audience: appType,
+		Expire:   &flagExpire,
 	})
 	if err != nil {
 		return err
@@ -443,7 +537,7 @@ func appOrKonnectorTokenInstance(cmd *cobra.Command, args []string, appType stri
 }
 
 var appTokenInstanceCmd = &cobra.Command{
-	Use:   "token-app [domain] [slug]",
+	Use:   "token-app <domain> <slug>",
 	Short: "Generate a new application token",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return appOrKonnectorTokenInstance(cmd, args, "app")
@@ -451,7 +545,7 @@ var appTokenInstanceCmd = &cobra.Command{
 }
 
 var konnectorTokenInstanceCmd = &cobra.Command{
-	Use:   "token-konnector [domain] [slug]",
+	Use:   "token-konnector <domain> <slug>",
 	Short: "Generate a new konnector token",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return appOrKonnectorTokenInstance(cmd, args, "konn")
@@ -459,7 +553,7 @@ var konnectorTokenInstanceCmd = &cobra.Command{
 }
 
 var cliTokenInstanceCmd = &cobra.Command{
-	Use:   "token-cli [domain] [scopes]",
+	Use:   "token-cli <domain> <scopes>",
 	Short: "Generate a new CLI access token (global access)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 2 {
@@ -480,7 +574,7 @@ var cliTokenInstanceCmd = &cobra.Command{
 }
 
 var oauthTokenInstanceCmd = &cobra.Command{
-	Use:   "token-oauth [domain] [clientid] [scopes]",
+	Use:   "token-oauth <domain> <clientid> <scopes>",
 	Short: "Generate a new OAuth access token",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 3 {
@@ -492,6 +586,7 @@ var oauthTokenInstanceCmd = &cobra.Command{
 			Subject:  args[1],
 			Audience: "access-token",
 			Scope:    args[2:],
+			Expire:   &flagExpire,
 		})
 		if err != nil {
 			return err
@@ -502,7 +597,7 @@ var oauthTokenInstanceCmd = &cobra.Command{
 }
 
 var oauthRefreshTokenInstanceCmd = &cobra.Command{
-	Use:   "refresh-token-oauth [domain] [clientid] [scopes]",
+	Use:   "refresh-token-oauth <domain> <clientid> <scopes>",
 	Short: "Generate a new OAuth refresh token",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 3 {
@@ -524,7 +619,7 @@ var oauthRefreshTokenInstanceCmd = &cobra.Command{
 }
 
 var oauthClientInstanceCmd = &cobra.Command{
-	Use:   "client-oauth [domain] [redirect_uri] [client_name] [software_id]",
+	Use:   "client-oauth <domain> <redirect_uri> <client_name> <software_id>",
 	Short: "Register a new OAuth client",
 	Long:  `It registers a new OAuth client and returns its client_id`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -563,44 +658,52 @@ updated.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c := newAdminClient()
 		if flagAllDomains {
+			logs := make(chan *client.JobLog)
+			go func() {
+				for log := range logs {
+					fmt.Printf("[%s][time:%s]", log.Level, log.Time.Format(time.RFC3339))
+					for k, v := range log.Data {
+						fmt.Printf("[%s:%s]", k, v)
+					}
+					fmt.Printf(" %s\n", log.Message)
+				}
+			}()
 			return c.Updates(&client.UpdatesOptions{
 				Slugs:         args,
 				ForceRegistry: flagForceRegistry,
+				OnlyRegistry:  flagOnlyRegistry,
+				Logs:          logs,
 			})
 		}
 		if flagDomain == "" {
 			return errAppsMissingDomain
 		}
 		return c.Updates(&client.UpdatesOptions{
-			Domain:        flagDomain,
-			Slugs:         args,
-			ForceRegistry: flagForceRegistry,
+			Domain:             flagDomain,
+			DomainsWithContext: flagContextName,
+			Slugs:              args,
+			ForceRegistry:      flagForceRegistry,
+			OnlyRegistry:       flagOnlyRegistry,
 		})
 	},
 }
 
 var exportCmd = &cobra.Command{
-	Use:   "export [domain]",
+	Use:   "export",
 	Short: "Export an instance to a tarball",
 	Long:  `Export the files and photos albums to a tarball (.tar.gz)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c := newAdminClient()
-		if flagDomain == "" {
-			return errAppsMissingDomain
-		}
 		return c.Export(flagDomain)
 	},
 }
 
 var importCmd = &cobra.Command{
-	Use:   "import [domain] [tarball]",
+	Use:   "import <tarball>",
 	Short: "Import a tarball",
 	Long:  `Import a tarball with files, photos albums and contacts to an instance`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c := newAdminClient()
-		if flagDomain == "" {
-			return errAppsMissingDomain
-		}
 		if len(args) < 1 {
 			return errors.New("The path to the tarball is missing")
 		}
@@ -614,9 +717,9 @@ var importCmd = &cobra.Command{
 
 func init() {
 	instanceCmdGroup.AddCommand(showInstanceCmd)
+	instanceCmdGroup.AddCommand(showPrefixInstanceCmd)
 	instanceCmdGroup.AddCommand(addInstanceCmd)
 	instanceCmdGroup.AddCommand(modifyInstanceCmd)
-	instanceCmdGroup.AddCommand(cleanInstanceCmd)
 	instanceCmdGroup.AddCommand(lsInstanceCmd)
 	instanceCmdGroup.AddCommand(quotaInstanceCmd)
 	instanceCmdGroup.AddCommand(debugInstanceCmd)
@@ -631,6 +734,7 @@ func init() {
 	instanceCmdGroup.AddCommand(updateCmd)
 	instanceCmdGroup.AddCommand(exportCmd)
 	instanceCmdGroup.AddCommand(importCmd)
+	addInstanceCmd.Flags().StringSliceVar(&flagDomainAliases, "domain-aliases", nil, "Specify one or more aliases domain for the instance (separated by ',')")
 	addInstanceCmd.Flags().StringVar(&flagLocale, "locale", instance.DefaultLocale, "Locale of the new cozy instance")
 	addInstanceCmd.Flags().StringVar(&flagUUID, "uuid", "", "The UUID of the instance")
 	addInstanceCmd.Flags().StringVar(&flagTOS, "tos", "", "The TOS version signed")
@@ -644,6 +748,7 @@ func init() {
 	addInstanceCmd.Flags().StringSliceVar(&flagApps, "apps", nil, "Apps to be preinstalled")
 	addInstanceCmd.Flags().BoolVar(&flagDev, "dev", false, "To create a development instance")
 	addInstanceCmd.Flags().StringVar(&flagPassphrase, "passphrase", "", "Register the instance with this passphrase (useful for tests)")
+	modifyInstanceCmd.Flags().StringSliceVar(&flagDomainAliases, "domain-aliases", nil, "Specify one or more aliases domain for the instance (separated by ',')")
 	modifyInstanceCmd.Flags().StringVar(&flagLocale, "locale", instance.DefaultLocale, "New locale")
 	modifyInstanceCmd.Flags().StringVar(&flagUUID, "uuid", "", "New UUID")
 	modifyInstanceCmd.Flags().StringVar(&flagTOS, "tos", "", "Update the TOS version signed")
@@ -655,17 +760,26 @@ func init() {
 	modifyInstanceCmd.Flags().StringVar(&flagSettings, "settings", "", "New list of settings (eg offer:premium)")
 	modifyInstanceCmd.Flags().IntVar(&flagSwiftCluster, "swift-cluster", 0, "New swift cluster")
 	modifyInstanceCmd.Flags().StringVar(&flagDiskQuota, "disk-quota", "", "Specify a new disk quota")
+	modifyInstanceCmd.Flags().BoolVar(&flagBlocked, "blocked", false, "Block the instance")
 	modifyInstanceCmd.Flags().BoolVar(&flagOnboardingFinished, "onboarding-finished", false, "Force the finishing of the onboarding")
 	destroyInstanceCmd.Flags().BoolVar(&flagForce, "force", false, "Force the deletion without asking for confirmation")
 	fsckInstanceCmd.Flags().BoolVar(&flagFsckDry, "dry", false, "Don't modify the VFS, only show the inconsistencies")
 	fsckInstanceCmd.Flags().BoolVar(&flagFsckPrune, "prune", false, "Try to solve inconsistencies by modifying the file system")
 	oauthClientInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Output more informations in JSON format")
+	oauthTokenInstanceCmd.Flags().DurationVar(&flagExpire, "expire", 0, "Make the token expires in this amount of time")
+	appTokenInstanceCmd.Flags().DurationVar(&flagExpire, "expire", 0, "Make the token expires in this amount of time")
+	lsInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Show each line as a json representation of the instance")
+	lsInstanceCmd.Flags().StringSliceVar(&flagListFields, "fields", nil, "Arguments shown for each line in the list")
 	updateCmd.Flags().BoolVar(&flagAllDomains, "all-domains", false, "Work on all domains iterativelly")
 	updateCmd.Flags().StringVar(&flagDomain, "domain", "", "Specify the domain name of the instance")
+	updateCmd.Flags().StringVar(&flagContextName, "context-name", "", "Work only on the instances with the given context name")
 	updateCmd.Flags().BoolVar(&flagForceRegistry, "force-registry", false, "Force to update all applications sources from git to the registry")
+	updateCmd.Flags().BoolVar(&flagOnlyRegistry, "only-registry", false, "Only update applications installed from the registry")
 	exportCmd.Flags().StringVar(&flagDomain, "domain", "", "Specify the domain name of the instance")
 	importCmd.Flags().StringVar(&flagDomain, "domain", "", "Specify the domain name of the instance")
 	importCmd.Flags().StringVar(&flagDirectory, "directory", "", "Put the imported files inside this directory")
 	importCmd.Flags().BoolVar(&flagIncreaseQuota, "increase-quota", false, "Increase the disk quota if needed for importing all the files")
+	exportCmd.MarkFlagRequired("domain")
+	importCmd.MarkFlagRequired("domain")
 	RootCmd.AddCommand(instanceCmdGroup)
 }
