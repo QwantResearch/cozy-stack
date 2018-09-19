@@ -212,23 +212,21 @@ func IndexUpdate(docIndexes documentIndexes) error {
 
 	for i, result := range response.Results {
 
-		// TODO : deal with files with trashed = true (remove them from index or not)
+		originalLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
+
+		// Delete the files that are trashed = true or _deleted = true
+		if result.Doc.Get("_deleted") == true || result.Doc.Get("trashed") == true {
+			if originalLang == "" {
+				fmt.Printf("Warning on deleting: original index was not found. The file might have already been deleted when sent to trash or might have been deleted before having been indexed.\n")
+				continue
+			}
+			(*docIndexes.indexList[originalLang]).Delete(result.DocID)
+			continue
+		}
 
 		if _, ok := result.Doc.M["name"]; !ok {
 			// TODO : find out out why some changes don't correspond to files only and thus don't have "name" field
 			fmt.Printf("Error on fetching name\n")
-			continue
-		}
-
-		originalLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
-
-		// Delete the file if it has been sent to trashed
-		if result.Doc.M["trashed"] == true {
-			if originalLang == "" {
-				fmt.Printf("Error on deleting, original index not found\n")
-				continue
-			}
-			(*docIndexes.indexList[originalLang]).Delete(result.DocID)
 			continue
 		}
 
