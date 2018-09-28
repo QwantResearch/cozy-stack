@@ -1,4 +1,4 @@
-package index
+package indexation
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	// "github.com/blevesearch/bleve/mapping"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/index/search"
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
@@ -53,7 +54,6 @@ type documentIndexes struct {
 
 var indexes []documentIndexes
 
-var indexAlias bleve.IndexAlias
 var inst *instance.Instance
 
 var languages []string
@@ -94,13 +94,13 @@ func StartIndex(instance *instance.Instance) error {
 	}
 
 	ft_language = NewFastTextInst()
-	ft_language.LoadModel("pkg/index/lid.176.ftz")
+	ft_language.LoadModel("pkg/index/indexation/lid.176.ftz")
 
 	var err error
 
 	languages = GetAvailableLanguages()
 
-	prefixPath = "bleve/"
+	prefixPath = "bleve/index/"
 
 	for _, lang := range languages {
 		for _, docIndexes := range indexes {
@@ -112,18 +112,6 @@ func StartIndex(instance *instance.Instance) error {
 	}
 
 	AllIndexesUpdate()
-
-	// Creating an aliasIndex to make it clear to the user:
-
-	indexAlias = bleve.NewIndexAlias()
-
-	for _, lang := range languages {
-		for _, docIndexes := range indexes {
-			indexAlias.Add(*docIndexes.indexList[lang])
-		}
-	}
-
-	ReplicateAll()
 
 	return nil
 }
@@ -260,6 +248,13 @@ func IndexUpdate(docIndexes documentIndexes) error {
 
 		// Store the new seq number in the indexes
 		SetStoreSeq(docIndexes.indexList[lang], response.LastSeq)
+
+		// Send the new index to the search side
+		err := Replicate(docIndexes.indexList[lang], search.SearchPrefixPath+lang+"/"+docIndexes.indexPath)
+		if err != nil {
+			fmt.Printf("Error on replication:  %s\n", err)
+			continue
+		}
 	}
 
 	return nil
@@ -267,32 +262,31 @@ func IndexUpdate(docIndexes documentIndexes) error {
 
 func ReIndex() error {
 
+	// Save indexes before reindexing
+	ReplicateAll()
+
+	// Close existing indexes
+	for _, docIndexes := range indexes {
+		for _, lang := range languages {
+			(*docIndexes.indexList[lang]).Close()
+		}
+	}
+
+	// Remove indexes
 	os.RemoveAll(prefixPath)
 
-	AllIndexesUpdate()
-
+	// Reopen index from scratch
 	for _, docIndexes := range indexes {
-		newDocIndex := documentIndexes{
-			docType:   docIndexes.docType,
-			indexPath: docIndexes.indexPath,
-			indexList: make(map[string]*bleve.Index),
-		}
 		for _, lang := range languages {
 			var err error
-			newDocIndex.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
+			docIndexes.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
 			if err != nil {
 				fmt.Printf("Error on GetIndex:  %s\n", err)
 				return err
 			}
 		}
 
-		IndexUpdate(newDocIndex)
-
-		for _, lang := range languages {
-			indexAlias.Swap([]bleve.Index{*newDocIndex.indexList[lang]}, []bleve.Index{*docIndexes.indexList[lang]})
-			(*docIndexes.indexList[lang]).Close()
-			docIndexes.indexList[lang] = newDocIndex.indexList[lang]
-		}
+		IndexUpdate(docIndexes)
 
 	}
 
@@ -309,8 +303,10 @@ func ReplicateAll() error {
 		for _, docIndexes := range indexes {
 			tmp, _ := (*docIndexes.indexList[lang]).DocCount()
 			count += tmp
-			err := Replicate(docIndexes.indexList[lang], (*docIndexes.indexList[lang]).Name()+"/store.save")
+			fmt.Println("save/" + (*docIndexes.indexList[lang]).Name())
+			err := Replicate(docIndexes.indexList[lang], "save/"+(*docIndexes.indexList[lang]).Name())
 			if err != nil {
+				fmt.Printf("Error on replication: %s\n", err)
 				return err
 			}
 		}
@@ -332,7 +328,14 @@ func Replicate(index *bleve.Index, path string) error {
 		return err
 	}
 
-	f, _ := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	// In case the query folder doesn't exist yet
+	err = os.MkdirAll(path, 0700)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	f, _ := os.OpenFile(path+"/store", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	err = r.WriteTo(f)
 	if err != nil {
 		fmt.Println(err)
@@ -343,11 +346,20 @@ func Replicate(index *bleve.Index, path string) error {
 		fmt.Println(err)
 		return err
 	}
-
 	err = r.Close()
 	if err != nil {
 		fmt.Println(err)
 		return err
+	}
+
+	if _, err := os.Stat(path + "/index_meta.json"); os.IsNotExist(err) {
+		f, err = os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			fmt.Println(err)
+			return err
+		}
+		f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
+		f.Close()
 	}
 
 	return nil

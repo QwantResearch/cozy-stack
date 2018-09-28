@@ -8,7 +8,8 @@ import (
 	// "github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	// "github.com/cozy/cozy-stack/web/middlewares"
-	"github.com/cozy/cozy-stack/pkg/index"
+	"github.com/cozy/cozy-stack/pkg/index/indexation"
+	"github.com/cozy/cozy-stack/pkg/index/search"
 	// "github.com/cozy/cozy-stack/web/permissions"
 	// "github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/echo"
@@ -27,6 +28,7 @@ func SearchQuery(c echo.Context) error {
 	var findRequest map[string]interface{}
 
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
 		return jsonapi.NewError(http.StatusBadRequest, "Could not decode the request")
 	}
 
@@ -38,7 +40,7 @@ func SearchQuery(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, total, _ := index.QueryIndex(request)
+	results, total, _ := search.QueryIndex(request)
 
 	out := make([]jsonapi.Object, len(results))
 	for i, result := range results {
@@ -57,6 +59,7 @@ func SearchQueryPrefix(c echo.Context) error {
 	var findRequest map[string]interface{}
 
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
 		return jsonapi.NewError(http.StatusBadRequest, "Could not decode the request")
 	}
 
@@ -68,7 +71,7 @@ func SearchQueryPrefix(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, total, _ := index.QueryPrefixIndex(request)
+	results, total, _ := search.QueryPrefixIndex(request)
 
 	out := make([]jsonapi.Object, len(results))
 	for i, result := range results {
@@ -89,8 +92,9 @@ func Reindex(c echo.Context) error {
 	// 	return err
 	// }
 
-	err := index.ReIndex()
+	err := indexation.ReIndex()
 	if err != nil {
+		fmt.Printf("Error on opening index: %s\n", err)
 		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
 	}
 
@@ -100,7 +104,7 @@ func Reindex(c echo.Context) error {
 
 func IndexUpdate(c echo.Context) error {
 
-	err := index.AllIndexesUpdate()
+	err := indexation.AllIndexesUpdate()
 	if err != nil {
 		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
 	}
@@ -109,8 +113,8 @@ func IndexUpdate(c echo.Context) error {
 
 }
 
-func MakeRequest(mapJSONRequest map[string]interface{}) index.QueryRequest {
-	request := index.QueryRequest{
+func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
+	request := search.QueryRequest{
 		QueryString: mapJSONRequest["searchQuery"].(string),
 		// default values
 		NumbResults: 15,

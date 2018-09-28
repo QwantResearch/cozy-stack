@@ -1,4 +1,4 @@
-package index
+package indexation
 
 import (
 	"github.com/blevesearch/bleve"

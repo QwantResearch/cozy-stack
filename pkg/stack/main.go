@@ -9,7 +9,8 @@ import (
 	"github.com/cozy/checkup"
 	"github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
-	"github.com/cozy/cozy-stack/pkg/index"
+	"github.com/cozy/cozy-stack/pkg/index/indexation"
+	"github.com/cozy/cozy-stack/pkg/index/search"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/logger"
@@ -148,16 +149,16 @@ security features. Please do not use this binary as your production server.
 	db_name := list[0].Domain
 	db, _ := instance.Get(db_name)
 
-	index.StartIndex(db)
+	indexation.StartIndex(db)
 
-	request := index.QueryRequest{
+	request := search.QueryRequest{
 		QueryString: "qwant",
 		NumbResults: 15,
 		Highlight:   true,
 		Name:        true,
 		Rev:         true,
 	}
-	results, _, _ := index.QueryIndex(request)
+	results, _, _ := search.QueryIndex(request)
 	fmt.Println(results)
 
 	return

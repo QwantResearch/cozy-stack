@@ -1,4 +1,4 @@
-package index
+package indexation
 
 // #cgo LDFLAGS: -L${SRCDIR} -lfasttextgo -lstdc++ -lm
 // #include <stdlib.h>

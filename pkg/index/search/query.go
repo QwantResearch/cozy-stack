@@ -1,4 +1,4 @@
-package index
+package search
 
 import (
 	"encoding/json"
@@ -11,11 +11,11 @@ import (
 )
 
 type QueryRequest struct {
-	QueryString string
-	NumbResults int
-	Highlight   bool
-	Name        bool
-	Rev         bool
+	QueryString string `json:"queryString"`
+	NumbResults int    `json:"numbResults"`
+	Highlight   bool   `json:"highlight"`
+	Name        bool   `json:"name"`
+	Rev         bool   `json:"_rev"`
 }
 
 type SearchResult struct {
@@ -37,9 +37,53 @@ func (r *SearchResult) Included() []jsonapi.Object             { return []jsonap
 func (r *SearchResult) MarshalJSON() ([]byte, error)           { return json.Marshal(*r) }
 func (r *SearchResult) Links() *jsonapi.LinksList              { return nil }
 
+const (
+	SearchPrefixPath = "bleve/query/"
+)
+
+func OpenIndexAlias() (bleve.IndexAlias, []*bleve.Index, error) {
+
+	// Deal with languages and docTypes dynamically instead
+	languages := []string{"fr", "en"}
+	doctypePaths := []string{"file.bleve"}
+
+	var indexes []*bleve.Index
+
+	indexAlias := bleve.NewIndexAlias()
+
+	for _, lang := range languages {
+		for _, doctypePath := range doctypePaths {
+			index, err := bleve.Open(SearchPrefixPath + lang + "/" + doctypePath)
+			if err != nil {
+				fmt.Printf("Error on opening index: %s\n", err)
+				// TODO : deal with thar error better in case of index not ready yet
+				return nil, nil, err
+			}
+			indexes = append(indexes, &index)
+			indexAlias.Add(index)
+		}
+	}
+
+	return indexAlias, indexes, nil
+}
+
+func CloseIndexAlias(indexAlias bleve.IndexAlias, indexes []*bleve.Index) {
+	for _, index := range indexes {
+		indexAlias.Remove((*index))
+		(*index).Close()
+	}
+
+}
+
 func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	start := time.Now()
+
+	indexAlias, indexes, err := OpenIndexAlias()
+	if err != nil {
+		fmt.Printf("Error when opening indexAlias: %s", err)
+		return nil, 0, err
+	}
 
 	searchRequest := BuildQuery(request, false)
 
@@ -48,7 +92,8 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 		fmt.Printf("Error on querying: %s", err)
 		return nil, 0, err
 	}
-	fmt.Printf(searchResults.String())
+
+	CloseIndexAlias(indexAlias, indexes)
 
 	for _, dateRange := range searchResults.Facets["created"].DateRanges {
 		fmt.Printf("\t%s(%d)\n", dateRange.Name, dateRange.Count)
@@ -68,6 +113,12 @@ func PreparingQuery(queryString string) string {
 
 func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
+	indexAlias, indexes, err := OpenIndexAlias()
+	if err != nil {
+		fmt.Printf("Error when opening indexAlias: %s", err)
+		return nil, 0, err
+	}
+
 	searchRequest := BuildQuery(request, true)
 
 	searchResults, err := indexAlias.Search(searchRequest)
@@ -75,7 +126,8 @@ func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 		fmt.Printf("Error on querying: %s", err)
 		return nil, 0, err
 	}
-	fmt.Printf(searchResults.String())
+
+	CloseIndexAlias(indexAlias, indexes)
 
 	fetched := BuildResults(request, searchResults)
 
@@ -126,7 +178,7 @@ func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []Sea
 		currFetched := SearchResult{result.ID, (result.Fields["docType"]).(string), "", "", ""}
 
 		if request.Highlight {
-			currFetched.Highlight = result.Fragments["name"][0]
+			currFetched.Highlight = result.Fragments["name"][0] //TODO deal with Fragments better, what if not on name field ?
 		}
 		if request.Name {
 			currFetched.Name = result.Fields["name"].(string)

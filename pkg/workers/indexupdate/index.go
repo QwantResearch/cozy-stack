@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/cozy/cozy-stack/pkg/index"
+	"github.com/cozy/cozy-stack/pkg/index/indexation"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 )
 
@@ -26,6 +26,6 @@ func init() {
 func Worker(ctx *jobs.WorkerContext) error {
 
 	fmt.Println("indexupdate worker working")
-	return index.AllIndexesUpdate()
+	return indexation.AllIndexesUpdate()
 
 }
