@@ -201,15 +201,15 @@ func IndexUpdate(docIndexes documentIndexes) error {
 
 	for i, result := range response.Results {
 
-		originalLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
+		originalIndexLang := FindWhichLangIndexDoc(docIndexes.indexList, result.DocID)
 
 		// Delete the files that are trashed = true or _deleted = true
 		if result.Doc.Get("_deleted") == true || result.Doc.Get("trashed") == true {
-			if originalLang == "" {
-				fmt.Printf("Warning on deleting: original index was not found. The file might have already been deleted when sent to trash or might have been deleted before having been indexed.\n")
+			if originalIndexLang == "" {
+				// The file has already been deleted or hadn't had been indexed before either
 				continue
 			}
-			(*docIndexes.indexList[originalLang]).Delete(result.DocID)
+			(*docIndexes.indexList[originalIndexLang]).Delete(result.DocID)
 			continue
 		}
 
@@ -219,10 +219,10 @@ func IndexUpdate(docIndexes documentIndexes) error {
 			continue
 		}
 
-		if originalLang != "" {
+		if originalIndexLang != "" {
 			// We found the document so we should update it the original index
 			result.Doc.M["docType"] = docIndexes.docType
-			batch[originalLang].Index(result.DocID, result.Doc.M)
+			batch[originalIndexLang].Index(result.DocID, result.Doc.M)
 		} else {
 			// We couldn't find the document, so we predict the language to index it in the right index
 			pred, err := ft_language.GetLanguage(result.Doc.M["name"].(string)) // TODO: predict on content and not "name" field in particular
