@@ -2,6 +2,7 @@ package indexation
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"time"
 
@@ -335,13 +336,18 @@ func Replicate(index *bleve.Index, path string) error {
 		return err
 	}
 
-	f, _ := os.OpenFile(path+"/store", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	err = r.WriteTo(f)
+	tmpFile, err := ioutil.TempFile(path, "store.tmp.")
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
-	err = f.Close()
+
+	err = r.WriteTo(tmpFile)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	err = tmpFile.Close()
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -353,7 +359,7 @@ func Replicate(index *bleve.Index, path string) error {
 	}
 
 	if _, err := os.Stat(path + "/index_meta.json"); os.IsNotExist(err) {
-		f, err = os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+		f, err := os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			fmt.Println(err)
 			return err
@@ -361,6 +367,9 @@ func Replicate(index *bleve.Index, path string) error {
 		f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
 		f.Close()
 	}
+
+	// TODO : put a lock on the rename if necessary (even though it is based on syscall.Rename on Posix systems)
+	os.Rename(tmpFile.Name(), path+"/store")
 
 	return nil
 }
