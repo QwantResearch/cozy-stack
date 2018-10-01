@@ -369,7 +369,11 @@ func Replicate(index *bleve.Index, path string) error {
 	}
 
 	// TODO : put a lock on the rename if necessary (even though it is based on syscall.Rename on Posix systems)
-	os.Rename(tmpFile.Name(), path+"/store")
+	err = os.Rename(tmpFile.Name(), path+"/store")
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
 
 	return nil
 }
