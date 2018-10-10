@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -51,6 +52,7 @@ type documentIndexes struct {
 	docType   string
 	indexPath string
 	indexList map[string]*bleve.Index // The mapping between the languages and the corresponding indexes
+	updateMu  *sync.Mutex
 }
 
 var indexes []documentIndexes
@@ -69,28 +71,31 @@ func StartIndex(instance *instance.Instance) error {
 
 	indexes = []documentIndexes{
 		documentIndexes{
-			consts.PhotosAlbums,
-			"photo.albums.bleve",
-			map[string]*bleve.Index{
+			docType:   consts.PhotosAlbums,
+			indexPath: "photo.albums.bleve",
+			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
 			},
+			updateMu: new(sync.Mutex),
 		},
 		documentIndexes{
-			consts.Files,
-			"file.bleve",
-			map[string]*bleve.Index{
+			docType:   consts.Files,
+			indexPath: "file.bleve",
+			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
 			},
+			updateMu: new(sync.Mutex),
 		},
 		documentIndexes{
-			"io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
-			"bank.accounts.bleve",
-			map[string]*bleve.Index{
+			docType:   "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
+			indexPath: "bank.accounts.bleve",
+			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
 			},
+			updateMu: new(sync.Mutex),
 		},
 	}
 
@@ -172,6 +177,9 @@ func AllIndexesUpdate() error {
 }
 
 func IndexUpdate(docIndexes documentIndexes) error {
+
+	docIndexes.updateMu.Lock()
+	defer docIndexes.updateMu.Unlock()
 
 	// Set request to get last changes
 	last_store_seq, err := GetStoreSeq(docIndexes.indexList["en"])
