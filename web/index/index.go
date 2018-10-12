@@ -3,7 +3,10 @@ package index
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net/http"
+	"os"
 
 	// "github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/web/jsonapi"
@@ -20,6 +23,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
 	router.POST("/_index_update", IndexUpdate)
+	router.POST("/_update_index_alias/:doctype/:lang", ReplicateIndex)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -111,6 +115,54 @@ func IndexUpdate(c echo.Context) error {
 
 	return jsonapi.DataList(c, http.StatusOK, nil, nil)
 
+}
+
+func ReplicateIndex(c echo.Context) error {
+
+	// TODO : see how to deal with permissions
+	// if err := permissions.AllowWholeType(c, permissions.POST, consts.Files); err != nil {
+	// 	fmt.Println(err)
+	// 	return err
+	// }
+
+	// TODO: Change path to be the same as doctype for usability
+	// docType := c.Param("doctype")
+	docType := "file.bleve"
+	lang := c.Param("lang")
+
+	path := search.SearchPrefixPath + lang + "/" + docType
+
+	err := os.MkdirAll(path, 0700)
+	if err != nil {
+		fmt.Println(err)
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	tmpFile, err := ioutil.TempFile(path, "store.tmp.")
+	if err != nil {
+		fmt.Println(err)
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	_, err = io.Copy(tmpFile, c.Request().Body)
+	if err != nil {
+		fmt.Println(err)
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	err = tmpFile.Close()
+	if err != nil {
+		fmt.Println(err)
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	err = os.Rename(tmpFile.Name(), path+"/store")
+	if err != nil {
+		fmt.Println(err)
+		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+	}
+
+	return jsonapi.DataList(c, http.StatusOK, nil, nil)
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {

@@ -3,6 +3,7 @@ package search
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -54,6 +55,10 @@ func OpenIndexAlias() (bleve.IndexAlias, []*bleve.Index, error) {
 	for _, lang := range languages {
 		for _, doctypePath := range doctypePaths {
 			index, err := bleve.Open(SearchPrefixPath + lang + "/" + doctypePath)
+			if err == bleve.ErrorIndexMetaMissing {
+				CreateMetaIndexJson(SearchPrefixPath + lang + "/" + doctypePath)
+				index, err = bleve.Open(SearchPrefixPath + lang + "/" + doctypePath)
+			}
 			if err != nil {
 				fmt.Printf("Error on opening index: %s\n", err)
 				// TODO : deal with thar error better in case of index not ready yet
@@ -81,7 +86,7 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	indexAlias, indexes, err := OpenIndexAlias()
 	if err != nil {
-		fmt.Printf("Error when opening indexAlias: %s", err)
+		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err
 	}
 
@@ -89,7 +94,7 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
-		fmt.Printf("Error on querying: %s", err)
+		fmt.Printf("Error on querying: %s\n", err)
 		return nil, 0, err
 	}
 
@@ -115,7 +120,7 @@ func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	indexAlias, indexes, err := OpenIndexAlias()
 	if err != nil {
-		fmt.Printf("Error when opening indexAlias: %s", err)
+		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err
 	}
 
@@ -123,7 +128,7 @@ func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	searchResults, err := indexAlias.Search(searchRequest)
 	if err != nil {
-		fmt.Printf("Error on querying: %s", err)
+		fmt.Printf("Error on querying: %s\n", err)
 		return nil, 0, err
 	}
 
@@ -191,4 +196,15 @@ func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []Sea
 	}
 
 	return fetched
+}
+
+func CreateMetaIndexJson(path string) error {
+	f, err := os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
+	f.Close()
+	return nil
 }

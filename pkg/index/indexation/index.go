@@ -1,17 +1,19 @@
 package indexation
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/blevesearch/bleve"
 	// "github.com/blevesearch/bleve/mapping"
+	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/index/search"
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
@@ -259,7 +261,7 @@ func IndexUpdate(docIndexes documentIndexes) error {
 		SetStoreSeq(docIndexes.indexList[lang], response.LastSeq)
 
 		// Send the new index to the search side
-		err := Replicate(docIndexes.indexList[lang], search.SearchPrefixPath+lang+"/"+docIndexes.indexPath)
+		err := SendIndexToQuery(docIndexes.indexList[lang], prefixPath+lang+"/"+docIndexes.indexPath, docIndexes.docType, lang)
 		if err != nil {
 			fmt.Printf("Error on replication:  %s\n", err)
 			continue
@@ -313,7 +315,7 @@ func ReplicateAll() error {
 			tmp, _ := (*docIndexes.indexList[lang]).DocCount()
 			count += tmp
 			fmt.Println("save/" + (*docIndexes.indexList[lang]).Name())
-			err := Replicate(docIndexes.indexList[lang], "save/"+(*docIndexes.indexList[lang]).Name())
+			_, err := Replicate(docIndexes.indexList[lang], "save/"+(*docIndexes.indexList[lang]).Name())
 			if err != nil {
 				fmt.Printf("Error on replication: %s\n", err)
 				return err
@@ -325,64 +327,77 @@ func ReplicateAll() error {
 	return nil
 }
 
-func Replicate(index *bleve.Index, path string) error {
+func Replicate(index *bleve.Index, path string) (string, error) {
 	_, store, err := (*index).Advanced()
 	if err != nil {
 		fmt.Println(err)
-		return err
+		return "", err
 	}
 	r, err := store.Reader()
 	if err != nil {
 		fmt.Println(err)
-		return err
+		return "", err
 	}
 
-	// In case the query folder doesn't exist yet
-	err = os.MkdirAll(path, 0700)
+	tmpFile, err := ioutil.TempFile(path, "store.replicate.")
 	if err != nil {
 		fmt.Println(err)
-		return err
-	}
-
-	tmpFile, err := ioutil.TempFile(path, "store.tmp.")
-	if err != nil {
-		fmt.Println(err)
-		return err
+		return "", err
 	}
 
 	err = r.WriteTo(tmpFile)
 	if err != nil {
 		fmt.Println(err)
-		return err
+		return "", err
 	}
 	err = tmpFile.Close()
 	if err != nil {
 		fmt.Println(err)
-		return err
+		return "", err
 	}
 	err = r.Close()
 	if err != nil {
 		fmt.Println(err)
+		return "", err
+	}
+
+	return tmpFile.Name(), nil
+}
+
+func SendIndexToQuery(index *bleve.Index, path string, docType string, lang string) error {
+
+	tmpFileName, err := Replicate(index, path)
+	if err != nil {
+		fmt.Println("Error on replicate when sending index to query")
+		fmt.Println(err)
 		return err
 	}
+	defer os.Remove(tmpFileName)
 
-	if _, err := os.Stat(path + "/index_meta.json"); os.IsNotExist(err) {
-		f, err := os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-		if err != nil {
-			fmt.Println(err)
-			return err
-		}
-		f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
-		f.Close()
-	}
-
-	// TODO : put a lock on the rename if necessary (even though it is based on syscall.Rename on Posix systems)
-	err = os.Rename(tmpFile.Name(), path+"/store")
+	body, err := ioutil.ReadFile(tmpFileName)
 	if err != nil {
+		fmt.Println("Error opening new alias")
 		fmt.Println(err)
 		return err
 	}
 
+	opts := &request.Options{
+		Method: http.MethodPost,
+		Scheme: inst.Scheme(),
+		Domain: inst.DomainName(),
+		Path:   "/index/_update_index_alias/" + docType + "/" + lang,
+		Headers: request.Headers{
+			"Content-Type": "application/indexstore", // See which content-type ?
+			// Deal with permissions
+		},
+		Body: bytes.NewReader(body),
+	}
+	_, err = request.Req(opts)
+	if err != nil {
+		fmt.Println("Error on POST request")
+		fmt.Println(err)
+		return err
+	}
 	return nil
 }
 
