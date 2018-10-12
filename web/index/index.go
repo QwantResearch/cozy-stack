@@ -125,9 +125,7 @@ func ReplicateIndex(c echo.Context) error {
 	// 	return err
 	// }
 
-	// TODO: Change path to be the same as doctype for usability
-	// docType := c.Param("doctype")
-	docType := "file.bleve"
+	docType := c.Param("doctype")
 	lang := c.Param("lang")
 
 	path := search.SearchPrefixPath + lang + "/" + docType

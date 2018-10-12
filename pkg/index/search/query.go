@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 )
@@ -46,18 +47,19 @@ func OpenIndexAlias() (bleve.IndexAlias, []*bleve.Index, error) {
 
 	// Deal with languages and docTypes dynamically instead
 	languages := []string{"fr", "en"}
-	doctypePaths := []string{"file.bleve"}
+	docTypeList := []string{consts.Files}
 
 	var indexes []*bleve.Index
 
 	indexAlias := bleve.NewIndexAlias()
 
 	for _, lang := range languages {
-		for _, doctypePath := range doctypePaths {
-			index, err := bleve.Open(SearchPrefixPath + lang + "/" + doctypePath)
+		for _, docType := range docTypeList {
+			path := SearchPrefixPath + lang + "/" + docType
+			index, err := bleve.Open(path)
 			if err == bleve.ErrorIndexMetaMissing {
-				CreateMetaIndexJson(SearchPrefixPath + lang + "/" + doctypePath)
-				index, err = bleve.Open(SearchPrefixPath + lang + "/" + doctypePath)
+				CreateMetaIndexJson(path)
+				index, err = bleve.Open(path)
 			}
 			if err != nil {
 				fmt.Printf("Error on opening index: %s\n", err)

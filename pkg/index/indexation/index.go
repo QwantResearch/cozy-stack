@@ -52,7 +52,6 @@ type photoAlbum struct {
 // documentIndexes structure that encapsulates, the doctype, the index path and the different language indexes corresponding to this doctype
 type documentIndexes struct {
 	docType   string
-	indexPath string
 	indexList map[string]*bleve.Index // The mapping between the languages and the corresponding indexes
 	updateMu  *sync.Mutex
 }
@@ -73,8 +72,7 @@ func StartIndex(instance *instance.Instance) error {
 
 	indexes = []documentIndexes{
 		documentIndexes{
-			docType:   consts.PhotosAlbums,
-			indexPath: "photo.albums.bleve",
+			docType: consts.PhotosAlbums,
 			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
@@ -82,8 +80,7 @@ func StartIndex(instance *instance.Instance) error {
 			updateMu: new(sync.Mutex),
 		},
 		documentIndexes{
-			docType:   consts.Files,
-			indexPath: "file.bleve",
+			docType: consts.Files,
 			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
@@ -91,8 +88,7 @@ func StartIndex(instance *instance.Instance) error {
 			updateMu: new(sync.Mutex),
 		},
 		documentIndexes{
-			docType:   "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
-			indexPath: "bank.accounts.bleve",
+			docType: "io.cozy.bank.accounts", // TODO : check why it doesn't exist in consts
 			indexList: map[string]*bleve.Index{
 				"fr": nil,
 				"en": nil,
@@ -112,7 +108,7 @@ func StartIndex(instance *instance.Instance) error {
 
 	for _, lang := range languages {
 		for _, docIndexes := range indexes {
-			docIndexes.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
+			docIndexes.indexList[lang], err = GetIndex(docIndexes.docType, lang)
 			if err != nil {
 				return err
 			}
@@ -135,11 +131,11 @@ func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string 
 	return ""
 }
 
-func GetIndex(indexPath string, lang string, docType string) (*bleve.Index, error) {
+func GetIndex(docType string, lang string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
 	AddTypeMapping(indexMapping, docType, lang)
 
-	fullIndexPath := prefixPath + lang + "/" + indexPath
+	fullIndexPath := prefixPath + lang + "/" + docType
 
 	i, err1 := bleve.Open(fullIndexPath)
 
@@ -162,7 +158,7 @@ func GetIndex(indexPath string, lang string, docType string) (*bleve.Index, erro
 		return &i, err1
 	}
 
-	fmt.Println("found existing Index", indexPath, lang)
+	fmt.Println("found existing Index", docType, lang)
 	return &i, nil
 }
 
@@ -173,7 +169,7 @@ func AllIndexesUpdate() error {
 			continue
 			// return err // TODO : change behaviour so that we don't ignore this error
 		}
-		fmt.Println(docIndexes.indexPath, "updated")
+		fmt.Println(docIndexes.docType, "updated")
 	}
 	return nil
 }
@@ -261,7 +257,7 @@ func IndexUpdate(docIndexes documentIndexes) error {
 		SetStoreSeq(docIndexes.indexList[lang], response.LastSeq)
 
 		// Send the new index to the search side
-		err := SendIndexToQuery(docIndexes.indexList[lang], prefixPath+lang+"/"+docIndexes.indexPath, docIndexes.docType, lang)
+		err := SendIndexToQuery(docIndexes.indexList[lang], docIndexes.docType, lang)
 		if err != nil {
 			fmt.Printf("Error on replication:  %s\n", err)
 			continue
@@ -290,7 +286,7 @@ func ReIndex() error {
 	for _, docIndexes := range indexes {
 		for _, lang := range languages {
 			var err error
-			docIndexes.indexList[lang], err = GetIndex(docIndexes.indexPath, lang, docIndexes.docType)
+			docIndexes.indexList[lang], err = GetIndex(docIndexes.docType, lang)
 			if err != nil {
 				fmt.Printf("Error on GetIndex:  %s\n", err)
 				return err
@@ -364,9 +360,9 @@ func Replicate(index *bleve.Index, path string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-func SendIndexToQuery(index *bleve.Index, path string, docType string, lang string) error {
+func SendIndexToQuery(index *bleve.Index, docType string, lang string) error {
 
-	tmpFileName, err := Replicate(index, path)
+	tmpFileName, err := Replicate(index, prefixPath+lang+"/"+docType)
 	if err != nil {
 		fmt.Println("Error on replicate when sending index to query")
 		fmt.Println(err)
