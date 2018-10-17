@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/cozy/cozy-stack/pkg/index/indexation"
+	"github.com/cozy/cozy-stack/pkg/fulltext/indexation"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 )
 

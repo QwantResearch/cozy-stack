@@ -14,7 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/web/data"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/files"
-	"github.com/cozy/cozy-stack/web/index"
+	"github.com/cozy/cozy-stack/web/fulltext"
 	"github.com/cozy/cozy-stack/web/instances"
 	"github.com/cozy/cozy-stack/web/intents"
 	"github.com/cozy/cozy-stack/web/jobs"
@@ -158,7 +158,7 @@ func SetupRoutes(router *echo.Echo) error {
 		realtime.Routes(router.Group("/realtime", mws...))
 		remote.Routes(router.Group("/remote", mws...))
 		sharings.Routes(router.Group("/sharings", mws...))
-		index.Routes(router.Group("/index", mws...))
+		fulltext.Routes(router.Group("/fulltext", mws...))
 
 		// The settings routes needs not to be blocked
 		apps.WebappsRoutes(router.Group("/apps", mwsNotBlocked...))

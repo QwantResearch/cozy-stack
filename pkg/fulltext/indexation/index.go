@@ -98,7 +98,7 @@ func StartIndex(instance *instance.Instance) error {
 	}
 
 	ft_language = NewFastTextInst()
-	ft_language.LoadModel("pkg/index/indexation/lid.176.ftz")
+	ft_language.LoadModel("pkg/fulltext/indexation/lid.176.ftz")
 
 	var err error
 
@@ -381,7 +381,7 @@ func SendIndexToQuery(index *bleve.Index, docType string, lang string) error {
 		Method: http.MethodPost,
 		Scheme: inst.Scheme(),
 		Domain: inst.DomainName(),
-		Path:   "/index/_update_index_alias/" + docType + "/" + lang,
+		Path:   "/fulltext/_update_index_alias/" + docType + "/" + lang,
 		Headers: request.Headers{
 			"Content-Type": "application/indexstore", // See which content-type ?
 			// Deal with permissions

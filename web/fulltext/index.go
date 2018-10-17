@@ -1,4 +1,4 @@
-package index
+package fulltext
 
 import (
 	"encoding/json"
@@ -11,8 +11,8 @@ import (
 	// "github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	// "github.com/cozy/cozy-stack/web/middlewares"
-	"github.com/cozy/cozy-stack/pkg/index/indexation"
-	"github.com/cozy/cozy-stack/pkg/index/search"
+	"github.com/cozy/cozy-stack/pkg/fulltext/indexation"
+	"github.com/cozy/cozy-stack/pkg/fulltext/search"
 	// "github.com/cozy/cozy-stack/web/permissions"
 	// "github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/echo"
