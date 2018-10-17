@@ -171,6 +171,7 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 		Highlight:   true,
 		Name:        true,
 		Rev:         true,
+		Offset:      0,
 	}
 
 	if numbResults, ok := mapJSONRequest["numbResults"]; ok {
@@ -187,6 +188,10 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 
 	if rev, ok := mapJSONRequest["_rev"]; ok {
 		request.Rev = rev.(bool)
+	}
+
+	if offset, ok := mapJSONRequest["offset"]; ok {
+		request.Offset = int(offset.(float64))
 	}
 
 	return request

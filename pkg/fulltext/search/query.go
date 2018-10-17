@@ -18,6 +18,7 @@ type QueryRequest struct {
 	Highlight   bool   `json:"highlight"`
 	Name        bool   `json:"name"`
 	Rev         bool   `json:"_rev"`
+	Offset      int    `json:"offset"`
 }
 
 type SearchResult struct {
@@ -165,6 +166,7 @@ func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
 		}
 	}
 	searchRequest.Size = request.NumbResults
+	searchRequest.From = request.Offset
 
 	// Addings Facets
 	// docTypes facet
