@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	// "github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 	// "github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/cozy/cozy-stack/pkg/fulltext/indexation"
@@ -164,6 +164,7 @@ func ReplicateIndex(c echo.Context) error {
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
+
 	request := search.QueryRequest{
 		QueryString: mapJSONRequest["searchQuery"].(string),
 		// default values
@@ -172,6 +173,7 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 		Name:        true,
 		Rev:         true,
 		Offset:      0,
+		DocTypes:    []string{consts.Files}, // TODO : add all default doctypes
 	}
 
 	if numbResults, ok := mapJSONRequest["numbResults"]; ok {
@@ -192,6 +194,13 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 
 	if offset, ok := mapJSONRequest["offset"]; ok {
 		request.Offset = int(offset.(float64))
+	}
+
+	if docTypes, ok := mapJSONRequest["docTypes"].([]interface{}); ok {
+		request.DocTypes = make([]string, len(docTypes))
+		for i, d := range docTypes {
+			request.DocTypes[i] = d.(string)
+		}
 	}
 
 	return request
