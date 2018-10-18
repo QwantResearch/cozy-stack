@@ -7,18 +7,18 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve"
-	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/web/jsonapi"
 )
 
 type QueryRequest struct {
-	QueryString string `json:"queryString"`
-	NumbResults int    `json:"numbResults"`
-	Highlight   bool   `json:"highlight"`
-	Name        bool   `json:"name"`
-	Rev         bool   `json:"_rev"`
-	Offset      int    `json:"offset"`
+	QueryString string   `json:"queryString"`
+	NumbResults int      `json:"numbResults"`
+	Highlight   bool     `json:"highlight"`
+	Name        bool     `json:"name"`
+	Rev         bool     `json:"_rev"`
+	Offset      int      `json:"offset"`
+	DocTypes    []string `json:"docTypes"`
 }
 
 type SearchResult struct {
@@ -44,11 +44,10 @@ const (
 	SearchPrefixPath = "bleve/query/"
 )
 
-func OpenIndexAlias() (bleve.IndexAlias, []*bleve.Index, error) {
+func OpenIndexAlias(docTypeList []string) (bleve.IndexAlias, []*bleve.Index, error) {
 
 	// Deal with languages and docTypes dynamically instead
 	languages := []string{"fr", "en"}
-	docTypeList := []string{consts.Files}
 
 	var indexes []*bleve.Index
 
@@ -87,7 +86,7 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	start := time.Now()
 
-	indexAlias, indexes, err := OpenIndexAlias()
+	indexAlias, indexes, err := OpenIndexAlias(request.DocTypes)
 	if err != nil {
 		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err
@@ -121,7 +120,7 @@ func PreparingQuery(queryString string) string {
 
 func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
-	indexAlias, indexes, err := OpenIndexAlias()
+	indexAlias, indexes, err := OpenIndexAlias(request.DocTypes)
 	if err != nil {
 		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err
