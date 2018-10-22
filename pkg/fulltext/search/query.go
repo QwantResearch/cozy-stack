@@ -22,11 +22,11 @@ type QueryRequest struct {
 }
 
 type SearchResult struct {
-	id        string `json:"_id"`
-	docType   string `json:"docType"`
-	rev       string `json:"_rev"`
-	Name      string `json:"name"`
-	Highlight string `json:"highlight"`
+	id        string              `json:"_id"`
+	docType   string              `json:"docType"`
+	rev       string              `json:"_rev"`
+	Name      string              `json:"name"`
+	Highlight map[string][]string `json:"highlight"`
 }
 
 func (r *SearchResult) Rev() string                            { return r.rev }
@@ -183,10 +183,10 @@ func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
 func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []SearchResult {
 	fetched := make([]SearchResult, len(searchResults.Hits))
 	for i, result := range searchResults.Hits {
-		currFetched := SearchResult{result.ID, (result.Fields["docType"]).(string), "", "", ""}
+		currFetched := SearchResult{result.ID, (result.Fields["docType"]).(string), "", "", nil}
 
 		if request.Highlight {
-			currFetched.Highlight = result.Fragments["name"][0] //TODO deal with Fragments better, what if not on name field ?
+			currFetched.Highlight = result.Fragments
 		}
 		if request.Name {
 			currFetched.Name = result.Fields["name"].(string)
