@@ -23,30 +23,31 @@ the following format:
 
 Where:
 
-* `<TAG>`: closest annotated tag of the current working directory. If no tag is
-  present, is uses the string "v0". This is not allowed in a production release.
-* `<NUMBER OF COMMITS AFTER TAG>`: number of commits after the closest tag if
-  the current working directory does not point exactly to a tag
-* `dirty`: added if the working if the working-directory is not clean (contains
-  un-commited modifications). This is not allowed in production release.
-* `dev`: added for a development mode release
+-   `<TAG>`: closest annotated tag of the current working directory. If no tag
+    is present, is uses the string "v0". This is not allowed in a production
+    release.
+-   `<NUMBER OF COMMITS AFTER TAG>`: number of commits after the closest tag if
+    the current working directory does not point exactly to a tag
+-   `dirty`: added if the working if the working-directory is not clean
+    (contains un-commited modifications). This is not allowed in production
+    release.
+-   `dev`: added for a development mode release
 
 # Sprint release
 
 At the end of a sprint, we release different versions of the stack:
 
-  - "Naked" stack, for GNU/Linux amd64/arm and FreeBSD amd64
-    - Create a tag `yyyyMmSs` and push it
-    - Generate all binaries, checksums and signatures with `./scripts/release.sh`
-    - Create a GitHub release and upload all previously generated assets with `./scripts/release.rb`
+-   "Naked" stack, for GNU/Linux amd64/arm, FreeBSD amd64 & Docker
 
-  - Docker development image
-    - Copy `cozy-stack` GNU/Linux amd64 binary to `./scripts`
-    - Go into `./scripts`
-    - Generate docker image with `docker build -t cozy/cozy-app-dev:<tag>`
-    - Push image to the Docker hub with `docker push cozy/cozy-app-dev:<tag>`
+    -   Create a tag `yyyyMmSs` and push it
+    -   Generate all binaries, checksums, Docker images and signatures with
+        `./scripts/release.sh`
+    -   Create a GitHub release and upload all previously generated assets with
+        `./scripts/release.rb`
 
-  - Debian self-hosting packages
-    - Create a new version `yyyyMmSs-1` on https://github.com/cozy/debian-cozy/blob/master/changelog
-    - Create and push a tag `yyyyMmSs-1` on `https://github.com/cozy/debian-cozy`
-    - Build and publish packages on our internal build machine
+-   Debian self-hosting packages
+    -   Create a new version `yyyyMmSs-1` on
+        https://github.com/cozy/debian-cozy/blob/master/changelog
+    -   Create and push a tag `yyyyMmSs-1` on
+        `https://github.com/cozy/debian-cozy`
+    -   Build and publish packages on our internal build machine

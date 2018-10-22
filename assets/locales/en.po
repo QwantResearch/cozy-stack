@@ -49,7 +49,7 @@ msgid "Login Password button hide"
 msgstr "hide"
 
 msgid "Login Long Session"
-msgstr "Memorize"
+msgstr "Remember me"
 
 msgid "Login Submit"
 msgstr "Log in"
@@ -217,6 +217,15 @@ msgstr "Address of this Cozy does not exist"
 
 msgid "Error Instance not found Message"
 msgstr "You may have entered a wrong address form a typing mistake. To make sure, please check the address of your Cozy sent to you by e-mail during its creation."
+
+msgid "Error Application not found Title"
+msgstr "Application not yet available"
+
+msgid "Error Application not found Message"
+msgstr "We are sorry. This application is not yet available in your Cozy."
+
+msgid "Error Application not found Action"
+msgstr "Go to your home"
 
 msgid "Error Contact us"
 msgstr "A problem, a question ? Contact us at"
@@ -400,15 +409,6 @@ msgstr ""
 "You never asked for a new password? In this case you can forget this email.\n"
 "Just so you know, you have 15 minutes to choose a new password, then this email will self-destruct."
 
-msgid "Mail Konnector Error Subject"
-msgstr "Collection problem for your Cozy"
-
-msgid "Mail Konnector Error Intro"
-msgstr ""
-"Something wrong happened when we tried to gather the data from your {{.KonnectorName}} account.\n"
-"If you want more information, please go to the configuration page {{.KonnectorPage}} of your account.\n"
-"If the problem remains, please contact us at contact@cozycloud.cc\n"
-
 msgid "Mail Archive Subject"
 msgstr "Archive of your Cozy data"
 
@@ -552,18 +552,24 @@ msgid "Sharing Online help"
 msgstr "Try out online help."
 
 msgid "Notifications Disk Quota Subject"
-msgstr "You have reached 90% of your available storage"
+msgstr "You have currently reached 90% of your Cozy space."
 
 msgid "Notifications Disk Quota Intro"
-msgstr ""
-"You have reached 90% of your available storage. When reach your storage quota, you will not be able to add any more files to your Cozy.\"
-"In order to keep your account below its storage quota, you can delete files from your Cozy or subscribe to a new option."
+msgstr "You have two options to get more space."
 
-msgid "Notifications Disk Quota instruction"
-msgstr "Click on this button to subscribe to a new option and get more data in your Cozy."
+msgid "Notifications Disk Quota offers instruction"
+msgstr "Option 1: Upgrade your account\n"
+"Upgrade your Cozy by choosing new offer to get lots more space"
 
-msgid "Notifications Disk Quota text"
-msgstr "Subscribe for more data"
+msgid "Notifications Disk Quota offers text"
+msgstr "Upgrade now"
+
+msgid "Notifications Disk Quota free instructions"
+msgstr "Option 2: Free up space\n"
+"Save space by deleting unneeded files"
+
+msgid "Notifications Disk Quota free text"
+msgstr "Free up storage space"
 
 msgid "Terms of services have been updated"
 msgstr "To comply with the GDPR, Cozy Cloud has updated its Terms of Services that have taken effect on May 25, 2018"

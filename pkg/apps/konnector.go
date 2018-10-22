@@ -3,6 +3,7 @@ package apps
 import (
 	"encoding/json"
 	"io"
+	"net/url"
 	"time"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -107,6 +108,9 @@ func (m *KonnManifest) SetID(id string) {}
 
 // SetRev is part of the Manifest interface
 func (m *KonnManifest) SetRev(rev string) { m.DocRev = rev }
+
+// SetSource is part of the Manifest interface
+func (m *KonnManifest) SetSource(src *url.URL) { m.DocSource = src.String() }
 
 // Source is part of the Manifest interface
 func (m *KonnManifest) Source() string { return m.DocSource }
@@ -227,6 +231,17 @@ func GetKonnectorBySlug(db prefixer.Prefixer, slug string) (*KonnManifest, error
 		return nil, err
 	}
 	return man, nil
+}
+
+// GetWebappBySlugAndUpdate fetch the KonnManifest and perform an update of
+// the application if necessary and if the application was installed from the
+// registry.
+func GetKonnectorBySlugAndUpdate(db prefixer.Prefixer, slug string, copier Copier, registries []*url.URL) (*KonnManifest, error) {
+	man, err := GetKonnectorBySlug(db, slug)
+	if err != nil {
+		return nil, err
+	}
+	return doLazyUpdate(db, man, man.AvailableVersion, copier, registries).(*KonnManifest), nil
 }
 
 // ListKonnectors returns the list of installed konnectors applications.

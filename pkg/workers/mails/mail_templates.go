@@ -293,11 +293,6 @@ func init() {
 			Outro: "Mail Reset Passphrase Outro",
 		},
 		{
-			Name:    "konnector_error",
-			Subject: "Mail Konnector Error Subject",
-			Intro:   "Mail Konnector Error Intro",
-		},
-		{
 			Name:    "archiver",
 			Subject: "Mail Archive Subject",
 			Intro:   "Mail Archive Intro",
@@ -377,9 +372,14 @@ func init() {
 			Intro:   "Notifications Disk Quota Intro",
 			Actions: []MailAction{
 				{
-					Instructions: "Notifications Disk Quota instruction",
-					Text:         "Notifications Disk Quota text",
+					Instructions: "Notifications Disk Quota offers instruction",
+					Text:         "Notifications Disk Quota offers text",
 					Link:         "{{.OffersLink}}",
+				},
+				{
+					Instructions: "Notifications Disk Quota free instructions",
+					Text:         "Notifications Disk Quota free text",
+					Link:         "{{.CozyDriveLink}}",
 				},
 			},
 		},

@@ -13,14 +13,18 @@ The encryptor key filename is given the ".enc" extension suffix.
 
 The files permissions are 0400.
 
-example: cozy-stack config gen-keys ~/credentials-key
+```
+cozy-stack config gen-keys <filepath> [flags]
+```
+
+### Examples
+
+```
+$ cozy-stack config gen-keys ~/credentials-key
 keyfiles written in:
 	~/credentials-key.enc
 	~/credentials-key.dec
 
-
-```
-cozy-stack config gen-keys <filepath> [flags]
 ```
 
 ### Options

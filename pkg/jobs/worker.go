@@ -45,7 +45,7 @@ type (
 	// WorkerBeforeHook is an optional method that is always called before the
 	// job is being pushed into the queue. It can be useful to skip the job
 	// beforehand.
-	WorkerBeforeHook func(req *JobRequest) (bool, error)
+	WorkerBeforeHook func(job *Job) (bool, error)
 
 	// WorkerConfig is the configuration parameter of a worker defined by the job
 	// system. It contains parameters of the worker along with the worker main
@@ -298,12 +298,39 @@ func (w *Worker) work(workerID string, closed chan<- struct{}) {
 		// through the global job-system.
 		if job.TriggerID != "" && globalJobSystem != nil {
 			if _, ok := errRun.(ErrBadTrigger); ok {
-				globalJobSystem.DeleteTrigger(job, job.TriggerID)
+				onBadTriggerError(job)
 			}
 		}
 	}
 	joblog.Debugf("%s: worker shut down", workerID)
 	closed <- struct{}{}
+}
+
+// onBadTriggerError is the handler executed when we receive a specific
+// ErrBadTrigger error message:
+//   - delete the associated trigger
+//   - delete the account document associated with this trigger if any (not activated)
+func onBadTriggerError(job *Job) {
+	// XXX: the account deletion is not activated for now
+	// t, err := globalJobSystem.GetTrigger(job, job.TriggerID)
+	// if err != nil {
+	// 	return
+	// }
+
+	globalJobSystem.DeleteTrigger(job, job.TriggerID)
+
+	// if job.WorkerType != "konnector" {
+	// 	return
+	// }
+	// var msg struct {
+	// 	Account string `json:"account"`
+	// }
+	// if err = t.Infos().Message.Unmarshal(&msg); err == nil && msg.Account != "" {
+	// 	doc := couchdb.JSONDoc{Type: consts.Accounts}
+	// 	if err = couchdb.GetDoc(job, consts.Accounts, msg.Account, &doc); err == nil {
+	// 		couchdb.DeleteDoc(job, &doc)
+	// 	}
+	// }
 }
 
 func (w *Worker) defaultedConf(opts *JobOptions) *WorkerConfig {

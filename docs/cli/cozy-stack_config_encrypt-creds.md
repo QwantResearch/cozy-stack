@@ -1,20 +1,19 @@
-## cozy-stack fixer accounts-orphans
+## cozy-stack config encrypt-creds
 
-Rebuild triggers associated with orphan accounts
+Encrypt the given credentials with the specified decryption keyfile.
 
 ### Synopsis
 
-Rebuild triggers associated with orphan accounts
+Encrypt the given credentials with the specified decryption keyfile.
 
 ```
-cozy-stack fixer accounts-orphans <domain> [flags]
+cozy-stack config encrypt-creds <keyfile> <login> <password> [flags]
 ```
 
 ### Options
 
 ```
-      --dry-run   Dry run
-  -h, --help      help for accounts-orphans
+  -h, --help   help for encrypt-creds
 ```
 
 ### Options inherited from parent commands
@@ -29,5 +28,5 @@ cozy-stack fixer accounts-orphans <domain> [flags]
 
 ### SEE ALSO
 
-* [cozy-stack fixer](cozy-stack_fixer.md)	 - A set of tools to fix issues or migrate content for retro-compatibility.
+* [cozy-stack config](cozy-stack_config.md)	 - Show and manage configuration elements
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cozy/checkup"
 	"github.com/cozy/cozy-stack/pkg/config"
+	"github.com/cozy/cozy-stack/pkg/config_dyn"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/fulltext/indexation"
 	"github.com/cozy/cozy-stack/pkg/fulltext/search"
@@ -15,8 +16,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/sessions"
+	"github.com/cozy/cozy-stack/pkg/statik/fs"
 	"github.com/cozy/cozy-stack/pkg/utils"
-	"github.com/cozy/cozy-stack/pkg/workers/updates"
 
 	"github.com/google/gops/agent"
 	"github.com/sirupsen/logrus"
@@ -61,12 +62,13 @@ security features. Please do not use this binary as your production server.
 		var db checkup.Result
 		db, err = checkup.HTTPChecker{
 			URL:         u.String(),
+			Client:      config.GetConfig().CouchDB.Client,
 			MustContain: `"version":"2`,
 		}.Check()
 		if err != nil {
 			err = fmt.Errorf("Could not reach Couchdb 2.0 database: %s", err.Error())
 		} else if db.Status() == checkup.Down {
-			err = fmt.Errorf("Could not reach Couchdb 2.0 database")
+			err = fmt.Errorf("Could not reach Couchdb 2.0 database: %s", db.String())
 		} else if db.Status() != checkup.Healthy {
 			log.Warnf("CouchDB does not seem to be in a healthy state, " +
 				"the cozy-stack will be starting anyway")
@@ -115,22 +117,18 @@ security features. Please do not use this binary as your production server.
 		return
 	}
 
-	autoUpdates := config.GetConfig().AutoUpdates
-	cronSpecs := []jobs.CronSpec{
-		{
-			Activated:  autoUpdates.Activated,
-			Schedule:   autoUpdates.Schedule,
-			WorkerType: "updates",
-			WorkerTemplate: func() (jobs.Message, error) {
-				return jobs.NewMessage(updates.Options{AllDomains: true})
-			},
-		},
-	}
-
-	// Start update cron for auto-updates
-	crons, err := jobs.CronJobs(cronSpecs)
+	assetsList, err := config_dyn.GetAssetsList()
 	if err != nil {
 		return
+	}
+	cacheStorage := config.GetConfig().CacheStorage
+	if err = fs.RegisterCustomExternals(cacheStorage, assetsList, 6 /*= retry count */); err != nil {
+		return
+	}
+	assetsPollingDisabled := config.GetConfig().AssetsPollingDisabled
+	if !assetsPollingDisabled {
+		pollingInterval := config.GetConfig().AssetsPollingInterval
+		go config_dyn.PollAssetsList(cacheStorage, pollingInterval)
 	}
 
 	sessionSweeper := sessions.SweepLoginRegistrations()
@@ -138,7 +136,6 @@ security features. Please do not use this binary as your production server.
 	// Global shutdowner that composes all the running processes of the stack
 	processes = utils.NewGroupShutdown(
 		jobs.System(),
-		crons,
 		sessionSweeper,
 		gopAgent{},
 	)

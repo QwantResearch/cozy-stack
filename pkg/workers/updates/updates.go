@@ -231,11 +231,7 @@ func UpdateInstance(ctx *jobs.WorkerContext, inst *instance.Instance, opts *Opti
 }
 
 func installerPush(inst *instance.Instance, insc chan *apps.Installer, errc chan *updateError, opts *Options) {
-	registries, err := inst.Registries()
-	if err != nil {
-		errc <- &updateError{step: "Registries", reason: err}
-		return
-	}
+	registries := inst.Registries()
 
 	var g sync.WaitGroup
 	g.Add(2)
@@ -340,10 +336,11 @@ func createInstaller(inst *instance.Instance, registries []*url.URL, man apps.Ma
 	}
 	return apps.NewInstaller(inst, inst.AppsCopier(man.AppType()),
 		&apps.InstallerOptions{
-			Operation:  apps.Update,
-			Manifest:   man,
-			Registries: registries,
-			SourceURL:  sourceURL,
+			Operation:        apps.Update,
+			Manifest:         man,
+			Registries:       registries,
+			SourceURL:        sourceURL,
+			PermissionsAcked: true,
 		},
 	)
 }

@@ -13,8 +13,9 @@ cozy-stack instances client-oauth <domain> <redirect_uri> <client_name> <softwar
 ### Options
 
 ```
-  -h, --help   help for client-oauth
-      --json   Output more informations in JSON format
+      --allow-login-scope   Allow login scope
+  -h, --help                help for client-oauth
+      --json                Output more informations in JSON format
 ```
 
 ### Options inherited from parent commands

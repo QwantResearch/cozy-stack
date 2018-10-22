@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/client"
+	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	humanize "github.com/dustin/go-humanize"
@@ -33,8 +35,6 @@ var flagBlocked bool
 var flagDev bool
 var flagPassphrase string
 var flagForce bool
-var flagFsckDry bool
-var flagFsckPrune bool
 var flagJSON bool
 var flagDirectory string
 var flagIncreaseQuota bool
@@ -48,6 +48,8 @@ var flagTOSLatest string
 var flagContextName string
 var flagOnboardingFinished bool
 var flagExpire time.Duration
+var flagAllowLoginScope bool
+var flagFsckIndexIntegrity bool
 
 // instanceCmdGroup represents the instances command
 var instanceCmdGroup = &cobra.Command{
@@ -494,25 +496,28 @@ in swift/localfs but not couchdb.
 		domain := args[0]
 
 		c := newAdminClient()
-		list, err := c.FsckInstance(domain, flagFsckPrune, flagFsckDry)
+		res, err := c.Req(&request.Options{
+			Method: "GET",
+			Path:   "/instances/" + url.PathEscape(domain) + "/fsck",
+			Queries: url.Values{
+				"IndexIntegrity": {strconv.FormatBool(flagFsckIndexIntegrity)},
+			},
+		})
 		if err != nil {
 			return err
 		}
 
-		if len(list) == 0 {
-			fmt.Printf("Instance for domain %s is clean\n", domain)
-		} else {
-			for _, entry := range list {
-				fmt.Printf("- %q: %s\n", entry["filename"], entry["message"])
-				if pruneAction := entry["prune_action"]; pruneAction != "" {
-					fmt.Printf("  %s...", pruneAction)
-					if pruneError := entry["prune_error"]; pruneError != "" {
-						fmt.Printf("error: %s\n", pruneError)
-					} else {
-						fmt.Println("ok")
-					}
-				}
+		hasError := false
+		scanner := bufio.NewScanner(res.Body)
+		for scanner.Scan() {
+			if err = scanner.Err(); err != nil {
+				return err
 			}
+			fmt.Println(string(scanner.Bytes()))
+		}
+
+		if hasError {
+			os.Exit(1)
 		}
 		return nil
 	},
@@ -628,10 +633,11 @@ var oauthClientInstanceCmd = &cobra.Command{
 		}
 		c := newAdminClient()
 		oauthClient, err := c.RegisterOAuthClient(&client.OAuthClientOptions{
-			Domain:      args[0],
-			RedirectURI: args[1],
-			ClientName:  args[2],
-			SoftwareID:  args[3],
+			Domain:          args[0],
+			RedirectURI:     args[1],
+			ClientName:      args[2],
+			SoftwareID:      args[3],
+			AllowLoginScope: flagAllowLoginScope,
 		})
 		if err != nil {
 			return err
@@ -643,6 +649,45 @@ var oauthClientInstanceCmd = &cobra.Command{
 		} else {
 			_, err = fmt.Println(oauthClient["client_id"])
 		}
+		return err
+	},
+}
+
+var findOauthClientCmd = &cobra.Command{
+	Use:   "find-oauth-client <domain> <software_id>",
+	Short: "Find an OAuth client",
+	Long:  `Search an OAuth client from its SoftwareID`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return cmd.Usage()
+		}
+		var v interface{}
+		c := newAdminClient()
+
+		q := url.Values{
+			"domain":      {args[0]},
+			"software_id": {args[1]},
+		}
+
+		req := &request.Options{
+			Method:  "GET",
+			Path:    "instances/oauth_client",
+			Queries: q,
+		}
+		res, err := c.Req(req)
+		if err != nil {
+			return err
+		}
+		errd := json.NewDecoder(res.Body).Decode(&v)
+		if err != nil {
+			return errd
+		}
+		json, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(json))
+
 		return err
 	},
 }
@@ -715,6 +760,40 @@ var importCmd = &cobra.Command{
 	},
 }
 
+var showSwiftPrefixInstanceCmd = &cobra.Command{
+	Use:     "show-swift-prefix <domain>",
+	Short:   "Show the instance swift prefix of the specified domain",
+	Example: "$ cozy-stack instances show-swift-prefix cozy.tools:8080",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var v map[string]string
+
+		c := newAdminClient()
+		if len(args) < 1 {
+			return errors.New("The domain is missing")
+		}
+
+		req := &request.Options{
+			Method: "GET",
+			Path:   "instances/" + args[0] + "/swift-prefix",
+		}
+		res, err := c.Req(req)
+		if err != nil {
+			return err
+		}
+		errd := json.NewDecoder(res.Body).Decode(&v)
+		if errd != nil {
+			return errd
+		}
+		json, errj := json.MarshalIndent(v, "", "  ")
+		if errj != nil {
+			return errj
+		}
+		fmt.Println(string(json))
+
+		return nil
+	},
+}
+
 func init() {
 	instanceCmdGroup.AddCommand(showInstanceCmd)
 	instanceCmdGroup.AddCommand(showPrefixInstanceCmd)
@@ -731,9 +810,11 @@ func init() {
 	instanceCmdGroup.AddCommand(oauthTokenInstanceCmd)
 	instanceCmdGroup.AddCommand(oauthRefreshTokenInstanceCmd)
 	instanceCmdGroup.AddCommand(oauthClientInstanceCmd)
+	instanceCmdGroup.AddCommand(findOauthClientCmd)
 	instanceCmdGroup.AddCommand(updateCmd)
 	instanceCmdGroup.AddCommand(exportCmd)
 	instanceCmdGroup.AddCommand(importCmd)
+	instanceCmdGroup.AddCommand(showSwiftPrefixInstanceCmd)
 	addInstanceCmd.Flags().StringSliceVar(&flagDomainAliases, "domain-aliases", nil, "Specify one or more aliases domain for the instance (separated by ',')")
 	addInstanceCmd.Flags().StringVar(&flagLocale, "locale", instance.DefaultLocale, "Locale of the new cozy instance")
 	addInstanceCmd.Flags().StringVar(&flagUUID, "uuid", "", "The UUID of the instance")
@@ -749,7 +830,7 @@ func init() {
 	addInstanceCmd.Flags().BoolVar(&flagDev, "dev", false, "To create a development instance")
 	addInstanceCmd.Flags().StringVar(&flagPassphrase, "passphrase", "", "Register the instance with this passphrase (useful for tests)")
 	modifyInstanceCmd.Flags().StringSliceVar(&flagDomainAliases, "domain-aliases", nil, "Specify one or more aliases domain for the instance (separated by ',')")
-	modifyInstanceCmd.Flags().StringVar(&flagLocale, "locale", instance.DefaultLocale, "New locale")
+	modifyInstanceCmd.Flags().StringVar(&flagLocale, "locale", "", "New locale")
 	modifyInstanceCmd.Flags().StringVar(&flagUUID, "uuid", "", "New UUID")
 	modifyInstanceCmd.Flags().StringVar(&flagTOS, "tos", "", "Update the TOS version signed")
 	modifyInstanceCmd.Flags().StringVar(&flagTOSLatest, "tos-latest", "", "Update the latest TOS version")
@@ -763,9 +844,10 @@ func init() {
 	modifyInstanceCmd.Flags().BoolVar(&flagBlocked, "blocked", false, "Block the instance")
 	modifyInstanceCmd.Flags().BoolVar(&flagOnboardingFinished, "onboarding-finished", false, "Force the finishing of the onboarding")
 	destroyInstanceCmd.Flags().BoolVar(&flagForce, "force", false, "Force the deletion without asking for confirmation")
-	fsckInstanceCmd.Flags().BoolVar(&flagFsckDry, "dry", false, "Don't modify the VFS, only show the inconsistencies")
-	fsckInstanceCmd.Flags().BoolVar(&flagFsckPrune, "prune", false, "Try to solve inconsistencies by modifying the file system")
+	fsckInstanceCmd.Flags().BoolVar(&flagFsckIndexIntegrity, "index-indegrity", false, "Check the index integrity only")
+	fsckInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Output more informations in JSON format")
 	oauthClientInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Output more informations in JSON format")
+	oauthClientInstanceCmd.Flags().BoolVar(&flagAllowLoginScope, "allow-login-scope", false, "Allow login scope")
 	oauthTokenInstanceCmd.Flags().DurationVar(&flagExpire, "expire", 0, "Make the token expires in this amount of time")
 	appTokenInstanceCmd.Flags().DurationVar(&flagExpire, "expire", 0, "Make the token expires in this amount of time")
 	lsInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Show each line as a json representation of the instance")

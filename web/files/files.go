@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	pkgperm "github.com/cozy/cozy-stack/pkg/permissions"
@@ -29,8 +30,8 @@ import (
 	"github.com/cozy/cozy-stack/web/permissions"
 	web_utils "github.com/cozy/cozy-stack/web/utils"
 
+	statikFS "github.com/cozy/cozy-stack/pkg/statik/fs"
 	"github.com/cozy/echo"
-	statikFS "github.com/cozy/statik/fs"
 )
 
 type docPatch struct {
@@ -571,11 +572,11 @@ func serveThumbnailPlaceholder(res http.ResponseWriter, req *http.Request, doc *
 	if !utils.IsInArray(format, thumbnail.FormatsNames) {
 		return echo.NewHTTPError(http.StatusNotFound, "Format does not exist")
 	}
-	f, ok := statikFS.Get("/placeholders/thumbnail-" + format + ".png")
+	f, ok := statikFS.Get("/placeholders/thumbnail-"+format+".png", "")
 	if !ok {
 		return os.ErrNotExist
 	}
-	etag := f.Etag()
+	etag := f.Etag
 	if web_utils.CheckPreconditions(res, req, etag) {
 		return nil
 	}
@@ -605,7 +606,7 @@ func sendFileFromPath(c echo.Context, path string, checkPermission bool) error {
 	} else if !checkPermission {
 		// Allow some files to be displayed by the browser in the client-side apps
 		if doc.Mime == "text/plain" || doc.Class == "image" || doc.Class == "audio" || doc.Class == "video" || doc.Mime == "application/pdf" {
-			c.Response().Header().Del(echo.HeaderXFrameOptions)
+			middlewares.AppendCSPRule(c, "frame-ancestors", "*")
 		}
 	}
 	err = vfs.ServeFileContent(instance.VFS(), doc, disposition, c.Request(), c.Response())
@@ -956,6 +957,46 @@ func FindFilesMango(c echo.Context) error {
 
 }
 
+func fsckHandler(c echo.Context) error {
+	instance := middlewares.GetInstance(c)
+	cacheStorage := config.GetConfig().CacheStorage
+
+	if err := middlewares.AllowWholeType(c, permissions.GET, consts.Files); err != nil {
+		return err
+	}
+
+	noCache, _ := strconv.ParseBool(c.QueryParam("NoCache"))
+	key := "fsck:" + instance.DBPrefix()
+	if !noCache {
+		if r, ok := cacheStorage.GetCompressed(key); ok {
+			return c.Stream(http.StatusOK, echo.MIMEApplicationJSON, r)
+		}
+	}
+
+	logs := make([]*vfs.FsckLog, 0)
+	err := instance.VFS().Fsck(func(log *vfs.FsckLog) {
+		switch log.Type {
+		case vfs.ContentMismatch:
+			logs = append(logs, log)
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	logsData, err := json.Marshal(logs)
+	if err != nil {
+		return err
+	}
+
+	if !noCache {
+		expiration := utils.DurationFuzzing(3*30*24*time.Hour, 0.10)
+		cacheStorage.SetCompressed(key, logsData, expiration)
+	}
+
+	return c.JSONBlob(http.StatusOK, logsData)
+}
+
 // Routes sets the routing for the files service
 func Routes(router *echo.Group) {
 	router.HEAD("/download", ReadFileContentFromPathHandler)
@@ -997,6 +1038,7 @@ func Routes(router *echo.Group) {
 	router.DELETE("/trash/:file-id", DestroyFileHandler)
 
 	router.DELETE("/:file-id", TrashHandler)
+	router.GET("/fsck", fsckHandler)
 }
 
 // WrapVfsError returns a formatted error from a golang error emitted by the vfs

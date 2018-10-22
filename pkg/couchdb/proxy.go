@@ -34,8 +34,16 @@ func Proxy(db Database, doctype, path string) *httputil.ReverseProxy {
 		}
 	}
 
+	var transport http.RoundTripper
+	if client := config.GetConfig().CouchDB.Client; client != nil {
+		transport = client.Transport
+	} else {
+		transport = http.DefaultTransport
+	}
+
 	return &httputil.ReverseProxy{
-		Director: director,
+		Director:  director,
+		Transport: transport,
 	}
 }
 
@@ -67,9 +75,16 @@ func ProxyBulkDocs(db Database, doctype string, req *http.Request) (*httputil.Re
 	// reset body to proxy
 	req.Body = ioutil.NopCloser(bytes.NewReader(body))
 
+	var transport http.RoundTripper
+	if client := config.GetConfig().CouchDB.Client; client != nil {
+		transport = client.Transport
+	} else {
+		transport = http.DefaultTransport
+	}
+
 	p := Proxy(db, doctype, "/_bulk_docs")
 	p.Transport = &bulkTransport{
-		RoundTripper: http.DefaultTransport,
+		RoundTripper: transport,
 		OnResponseRead: func(data []byte) {
 			type respValue struct {
 				ID    string `json:"id"`

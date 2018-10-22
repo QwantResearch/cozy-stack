@@ -11,11 +11,14 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/accounts"
 	"github.com/cozy/cozy-stack/pkg/apps"
+	"github.com/cozy/cozy-stack/pkg/config"
+	"github.com/cozy/cozy-stack/pkg/config_dyn"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/statik/fs"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/pkg/vfs"
 	"github.com/cozy/cozy-stack/pkg/workers/updates"
@@ -184,23 +187,38 @@ func deleteHandler(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func fsckHandler(c echo.Context) error {
+func fsckHandler(c echo.Context) (err error) {
 	domain := c.Param("domain")
 	i, err := instance.Get(domain)
 	if err != nil {
 		return wrapError(err)
 	}
-	prune, _ := strconv.ParseBool(c.QueryParam("Prune"))
-	dryRun, _ := strconv.ParseBool(c.QueryParam("DryRun"))
-	fs := i.VFS()
-	logbook, err := fs.Fsck(vfs.FsckOptions{
-		Prune:  prune,
-		DryRun: dryRun,
-	})
-	if err != nil {
-		return wrapError(err)
+
+	indexIntegrityCheck, _ := strconv.ParseBool(c.QueryParam("IndexIntegrity"))
+
+	logCh := make(chan *vfs.FsckLog)
+	go func() {
+		fs := i.VFS()
+		if indexIntegrityCheck {
+			err = fs.CheckIndexIntegrity(func(log *vfs.FsckLog) { logCh <- log })
+		} else {
+			err = fs.Fsck(func(log *vfs.FsckLog) { logCh <- log })
+		}
+		close(logCh)
+	}()
+
+	w := c.Response().Writer
+	w.WriteHeader(200)
+	encoder := json.NewEncoder(w)
+	for log := range logCh {
+		if errenc := encoder.Encode(log); errenc != nil {
+			return errenc
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 	}
-	return c.JSON(http.StatusOK, logbook)
+	return err
 }
 
 func rebuildRedis(c echo.Context) error {
@@ -218,6 +236,28 @@ func rebuildRedis(c echo.Context) error {
 		}
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// Renders the assets list loaded in memory and served by the cozy
+func assetsInfos(c echo.Context) error {
+	assetsMap := make(map[string][]*fs.Asset)
+	fs.Foreach(func(name, context string, f *fs.Asset) {
+		assetsMap[context] = append(assetsMap[context], f)
+	})
+	return c.JSON(http.StatusOK, assetsMap)
+}
+
+func addAssets(c echo.Context) error {
+	var unmarshaledAssets []fs.AssetOption
+	if err := json.NewDecoder(c.Request().Body).Decode(&unmarshaledAssets); err != nil {
+		return err
+	}
+	cacheStorage := config.GetConfig().CacheStorage
+	err := fs.RegisterCustomExternals(cacheStorage, unmarshaledAssets, 0 /* = retry count */)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": err.Error()})
+	}
+	return config_dyn.UpdateAssetsList()
 }
 
 func cleanOrphanAccounts(c echo.Context) error {
@@ -374,6 +414,37 @@ func updatesHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, job)
 }
 
+func showPrefix(c echo.Context) error {
+	domain := c.Param("domain")
+
+	instance, err := instance.Get(domain)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, instance.DBPrefix())
+}
+
+func getSwiftBucketName(c echo.Context) error {
+	domain := c.Param("domain")
+
+	instance, err := instance.Get(domain)
+
+	if err != nil {
+		return err
+	}
+	type swifter interface {
+		ContainersNames() map[string]string
+	}
+
+	var containersNames map[string]string
+	if obj, ok := instance.VFS().(swifter); ok {
+		containersNames = obj.ContainersNames()
+	}
+
+	return c.JSON(http.StatusOK, containersNames)
+}
+
 func wrapError(err error) error {
 	switch err {
 	case instance.ErrNotFound:
@@ -406,9 +477,14 @@ func Routes(router *echo.Group) {
 	router.GET("/:domain/fsck", fsckHandler)
 	router.POST("/updates", updatesHandler)
 	router.POST("/token", createToken)
+	router.GET("/oauth_client", findClientBySoftwareID)
 	router.POST("/oauth_client", registerClient)
 	router.POST("/:domain/export", exporter)
 	router.POST("/:domain/import", importer)
 	router.POST("/:domain/orphan_accounts", cleanOrphanAccounts)
 	router.POST("/redis", rebuildRedis)
+	router.GET("/assets", assetsInfos)
+	router.POST("/assets", addAssets)
+	router.GET("/:domain/prefix", showPrefix)
+	router.GET("/:domain/swift-prefix", getSwiftBucketName)
 }

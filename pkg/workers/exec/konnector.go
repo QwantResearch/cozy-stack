@@ -10,7 +10,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cozy/cozy-stack/pkg/accounts"
 	"github.com/cozy/cozy-stack/pkg/apps"
@@ -19,7 +18,9 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/cozy/cozy-stack/pkg/jobs"
+	"github.com/cozy/cozy-stack/pkg/permissions"
 	"github.com/cozy/cozy-stack/pkg/realtime"
+	"github.com/cozy/cozy-stack/pkg/registry"
 	"github.com/cozy/cozy-stack/pkg/vfs"
 	"github.com/sirupsen/logrus"
 
@@ -33,7 +34,7 @@ const (
 
 type konnectorWorker struct {
 	slug string
-	msg  *konnectorMessage
+	msg  *KonnectorMessage
 	man  *apps.KonnManifest
 
 	err     error
@@ -48,43 +49,57 @@ const (
 	konnectorMsgTypeCritical = "critical"
 )
 
-type konnectorMessage struct {
-	Account           string `json:"account"`
-	Konnector         string `json:"konnector"`
-	FolderToSave      string `json:"folder_to_save"`
-	DefaultFolderPath string `json:"default_folder_path"`
-	AccountDeleted    bool   `json:"account_deleted"`
+// KonnectorMessage is the message structure sent to the konnector worker.
+type KonnectorMessage struct {
+	Account        string `json:"account"`        // Account is the identifier of the account
+	Konnector      string `json:"konnector"`      // Konnector is the slug of the konnector
+	FolderToSave   string `json:"folder_to_save"` // FolderToSave is the identifier of the folder
+	AccountDeleted bool   `json:"account_deleted,omitempty"`
 
 	// Data contains the original value of the message, even fields that are not
 	// part of our message definition.
 	data json.RawMessage
 }
 
-func (m *konnectorMessage) ToJSON() string {
+func (m *KonnectorMessage) ToJSON() string {
 	return string(m.data)
 }
 
-// konnectorResult stores the result of a konnector execution.
-// TODO: remove this type kept for retro-compatibility.
-type konnectorResult struct {
-	DocID       string     `json:"_id,omitempty"`
-	DocRev      string     `json:"_rev,omitempty"`
-	CreatedAt   time.Time  `json:"last_execution"`
-	LastSuccess time.Time  `json:"last_success"`
-	Account     string     `json:"account"`
-	AccountRev  string     `json:"account_rev"`
-	State       jobs.State `json:"state"`
-	Error       string     `json:"error"`
+func (m *KonnectorMessage) updateFolderToSave(dir string) {
+	m.FolderToSave = dir
+	var d map[string]interface{}
+	json.Unmarshal(m.data, &d)
+	d["folder_to_save"] = dir
+	m.data, _ = json.Marshal(d)
 }
 
 // beforeHookKonnector skips jobs from trigger that are failing on certain
 // errors.
-func beforeHookKonnector(req *jobs.JobRequest) (bool, error) {
-	if req.Manual || req.Trigger == nil {
+func beforeHookKonnector(job *jobs.Job) (bool, error) {
+	var msg KonnectorMessage
+
+	if err := json.Unmarshal(job.Message, &msg); err == nil {
+		inst, err := instance.Get(job.DomainName())
+		if err != nil {
+			return false, err
+		}
+		app, err := registry.GetApplication(msg.Konnector, inst.Registries())
+		if err != nil {
+			job.Logger().Warnf("konnector %q could not get application to fetch maintenance status", msg.Konnector)
+		} else if app.MaintenanceActivated {
+			if job.Manual && !app.MaintenanceOptions.FlagDisallowManualExec {
+				return true, nil
+			}
+			job.Logger().Infof("konnector %q has not been triggered because of its maintenance status", msg.Konnector)
+			return false, nil
+		}
+	}
+
+	if job.Manual || job.TriggerID == "" {
 		return true, nil
 	}
-	trigger := req.Trigger
-	state, err := jobs.GetTriggerState(trigger)
+
+	state, err := jobs.GetTriggerState(job, job.TriggerID)
 	if err != nil {
 		return false, err
 	}
@@ -97,17 +112,10 @@ func beforeHookKonnector(req *jobs.JobRequest) (bool, error) {
 	return true, nil
 }
 
-func (r *konnectorResult) ID() string         { return r.DocID }
-func (r *konnectorResult) Rev() string        { return r.DocRev }
-func (r *konnectorResult) DocType() string    { return consts.KonnectorResults }
-func (r *konnectorResult) Clone() couchdb.Doc { c := *r; return &c }
-func (r *konnectorResult) SetID(id string)    { r.DocID = id }
-func (r *konnectorResult) SetRev(rev string)  { r.DocRev = rev }
-
 func (w *konnectorWorker) PrepareWorkDir(ctx *jobs.WorkerContext, i *instance.Instance) (string, error) {
 	var err error
 	var data json.RawMessage
-	var msg konnectorMessage
+	var msg KonnectorMessage
 	if err = ctx.UnmarshalMessage(&data); err != nil {
 		return "", err
 	}
@@ -119,7 +127,9 @@ func (w *konnectorWorker) PrepareWorkDir(ctx *jobs.WorkerContext, i *instance.In
 	slug := msg.Konnector
 	w.slug = slug
 	w.msg = &msg
-	w.man, err = apps.GetKonnectorBySlug(i, slug)
+
+	w.man, err = apps.GetKonnectorBySlugAndUpdate(i, slug,
+		i.AppsCopier(apps.Konnector), i.Registries())
 	if err == apps.ErrNotFound {
 		return "", jobs.ErrBadTrigger{Err: err}
 	} else if err != nil {
@@ -128,8 +138,8 @@ func (w *konnectorWorker) PrepareWorkDir(ctx *jobs.WorkerContext, i *instance.In
 
 	// Check that the associated account is present.
 	var account *accounts.Account
-	if msg.Account != "" && !ctx.Manual() && !msg.AccountDeleted {
-		account := &accounts.Account{}
+	if msg.Account != "" && !msg.AccountDeleted {
+		account = &accounts.Account{}
 		err = couchdb.GetDoc(i, consts.Accounts, msg.Account, account)
 		if couchdb.IsNotFoundError(err) {
 			return "", jobs.ErrBadTrigger{Err: err}
@@ -166,8 +176,13 @@ func (w *konnectorWorker) PrepareWorkDir(ctx *jobs.WorkerContext, i *instance.In
 	}
 
 	// Create the folder in which the konnector has the right to write.
-	if err = ensureFolderToSave(i, &msg, slug, account); err != nil {
-		return "", nil
+	if err = w.ensureFolderToSave(ctx, i, account); err != nil {
+		return "", err
+	}
+
+	// Make sure the konnector can write to this folder
+	if err = w.ensurePermissions(i); err != nil {
+		return "", err
 	}
 
 	// If we get the AccountDeleted flag on, we check if the konnector manifest
@@ -190,14 +205,55 @@ func (w *konnectorWorker) PrepareWorkDir(ctx *jobs.WorkerContext, i *instance.In
 
 // ensureFolderToSave tries hard to give a folder to the konnector where it can
 // write its files if it needs to do so.
-func ensureFolderToSave(inst *instance.Instance, msg *konnectorMessage, slug string, account *accounts.Account) error {
+func (w *konnectorWorker) ensureFolderToSave(ctx *jobs.WorkerContext, inst *instance.Instance, account *accounts.Account) error {
 	fs := inst.VFS()
+	msg := w.msg
+
+	var normalizedFolderPath string
+	if account != nil {
+		admin := inst.Translate("Tree Administrative")
+		r := strings.NewReplacer("&", "_", "/", "_", "\\", "_", "#", "_",
+			",", "_", "+", "_", "(", "_", ")", "_", "$", "_", "@", "_", "~",
+			"_", "%", "_", ".", "_", "'", "_", "\"", "_", ":", "_", "*", "_",
+			"?", "_", "<", "_", ">", "_", "{", "_", "}", "_")
+		accountName := r.Replace(account.Name)
+		normalizedFolderPath = fmt.Sprintf("/%s/%s/%s", admin, strings.Title(w.slug), accountName)
+
+		// This is code to handle legacy: if the konnector does not actually require
+		// a directory (for instance because it does not upload files), but a folder
+		// has been created in the past by the stack which is still empty, then we
+		// delete it.
+		if msg.FolderToSave == "" && account.FolderPath == "" && account.Basic.FolderPath == "" {
+			if dir, errp := fs.DirByPath(normalizedFolderPath); errp == nil {
+				if account.Name == "" {
+					innerDirPath := path.Join(normalizedFolderPath, strings.Title(w.slug))
+					if innerDir, errp := fs.DirByPath(innerDirPath); errp == nil {
+						if isEmpty, _ := innerDir.IsEmpty(fs); isEmpty {
+							w.Logger(ctx).Warnf("Deleting empty directory for konnector: %q:%q", innerDir.ID(), normalizedFolderPath)
+							fs.DeleteDirDoc(innerDir)
+						}
+					}
+				}
+				if isEmpty, _ := dir.IsEmpty(fs); isEmpty {
+					w.Logger(ctx).Warnf("Deleting empty directory for konnector: %q:%q", dir.ID(), normalizedFolderPath)
+					fs.DeleteDirDoc(dir)
+				}
+			}
+		}
+	}
 
 	// 1. Check if the folder identified by its ID exists
 	if msg.FolderToSave != "" {
 		dir, err := fs.DirByID(msg.FolderToSave)
 		if err == nil {
 			if !strings.HasPrefix(dir.Fullpath, vfs.TrashDirName) {
+				if len(dir.ReferencedBy) == 0 {
+					dir.AddReferencedBy(couchdb.DocReference{
+						Type: consts.Konnectors,
+						ID:   consts.Konnectors + "/" + w.slug,
+					})
+					couchdb.UpdateDoc(inst, dir)
+				}
 				return nil
 			}
 		} else if !os.IsNotExist(err) {
@@ -206,7 +262,7 @@ func ensureFolderToSave(inst *instance.Instance, msg *konnectorMessage, slug str
 	}
 
 	// 2. Check if the konnector has a reference to a folder
-	start := []string{consts.Konnectors, consts.Konnectors + "/" + slug}
+	start := []string{consts.Konnectors, consts.Konnectors + "/" + w.slug}
 	end := []string{start[0], start[1], couchdb.MaxString}
 	req := &couchdb.ViewRequest{
 		StartKey:    start,
@@ -227,37 +283,72 @@ func ensureFolderToSave(inst *instance.Instance, msg *konnectorMessage, slug str
 			}
 		}
 		if count == 1 {
-			msg.FolderToSave = dirID
+			msg.updateFolderToSave(dirID)
 			return nil
 		}
 	}
 
-	// 3. Recreate the folder
+	// 3 Check if a folder should be created
 	if account == nil {
 		return nil
 	}
-	admin := inst.Translate("Tree Administrative")
-	r := strings.NewReplacer("&", "_", "/", "_", "\\", "_", "#", "_",
-		",", "_", "+", "_", "(", "_", ")", "_", "$", "_", "@", "_", "~",
-		"_", "%", "_", ".", "_", "'", "_", "\"", "_", ":", "_", "*", "_",
-		"?", "_", "<", "_", ">", "_", "{", "_", "}", "_")
-	accountName := r.Replace(account.Name)
-	folderPath := fmt.Sprintf("/%s/%s/%s", admin, strings.Title(slug), accountName)
+	if msg.FolderToSave == "" && account.FolderPath == "" && account.Basic.FolderPath == "" {
+		return nil
+	}
+
+	// 4. Recreate the folder
+	folderPath := account.FolderPath
+	if folderPath == "" {
+		folderPath = account.Basic.FolderPath
+	}
+	if folderPath == "" {
+		folderPath = normalizedFolderPath
+	}
+
 	dir, err := vfs.MkdirAll(fs, folderPath)
 	if err != nil {
 		log := inst.Logger().WithField("nspace", "konnector")
 		log.Warnf("Can't create the default folder %s: %s", folderPath, err)
 		return err
 	}
-	msg.FolderToSave = dir.ID()
+	msg.updateFolderToSave(dir.ID())
 	if len(dir.ReferencedBy) == 0 {
 		dir.AddReferencedBy(couchdb.DocReference{
 			Type: consts.Konnectors,
-			ID:   consts.Konnectors + "/" + slug,
+			ID:   consts.Konnectors + "/" + w.slug,
 		})
 		couchdb.UpdateDoc(inst, dir)
 	}
 	return nil
+}
+
+// ensurePermissions checks that the konnector has the permissions to write
+// files in the folder referenced by the konnector, and adds the permission if
+// needed.
+func (w *konnectorWorker) ensurePermissions(inst *instance.Instance) error {
+	perms, err := permissions.GetForKonnector(inst, w.slug)
+	if err != nil {
+		return err
+	}
+	value := consts.Konnectors + "/" + w.slug
+	for _, rule := range perms.Permissions {
+		if rule.Type == consts.Files && rule.Selector == couchdb.SelectorReferencedBy {
+			for _, val := range rule.Values {
+				if val == value {
+					return nil
+				}
+			}
+		}
+	}
+	rule := permissions.Rule{
+		Type:        consts.Files,
+		Title:       "referenced folders",
+		Description: "folders referenced by the konnector",
+		Selector:    couchdb.SelectorReferencedBy,
+		Values:      []string{value},
+	}
+	perms.Permissions = append(perms.Permissions, rule)
+	return couchdb.UpdateDoc(inst, perms)
 }
 
 func copyFiles(workFS afero.Fs, fileServer apps.FileServer, slug, version string) error {
@@ -420,115 +511,11 @@ func (w *konnectorWorker) Error(i *instance.Instance, err error) error {
 }
 
 func (w *konnectorWorker) Commit(ctx *jobs.WorkerContext, errjob error) error {
-	if w.msg == nil {
-		return nil
-	}
-
-	// TODO: remove this retro-compatibility block
-	// <<<<<<<<<<<<<
-	accountID := w.msg.Account
-	domain := ctx.Domain()
-
-	inst, err := instance.Get(domain)
-	if err != nil {
-		return err
-	}
-
-	lastResult := &konnectorResult{}
-	err = couchdb.GetDoc(inst, consts.KonnectorResults, w.slug, lastResult)
-	if err != nil {
-		if !couchdb.IsNotFoundError(err) {
-			return err
-		}
-		lastResult = nil
-	}
-
-	var state jobs.State
-	var errstr string
-	var lastSuccess time.Time
-	if errjob != nil {
-		if lastResult != nil {
-			lastSuccess = lastResult.LastSuccess
-		}
-		errstr = errjob.Error()
-		state = jobs.Errored
+	log := w.Logger(ctx).WithField("account_id", w.msg.Account)
+	if errjob == nil {
+		log.Info("Konnector success")
 	} else {
-		lastSuccess = time.Now()
-		state = jobs.Done
+		log.Infof("Konnector failure: %s", errjob)
 	}
-
-	result := &konnectorResult{
-		DocID:       w.slug,
-		Account:     accountID,
-		CreatedAt:   time.Now(),
-		LastSuccess: lastSuccess,
-		State:       state,
-		Error:       errstr,
-	}
-	if lastResult == nil {
-		err = couchdb.CreateNamedDocWithDB(inst, result)
-	} else {
-		result.SetRev(lastResult.Rev())
-		err = couchdb.UpdateDoc(inst, result)
-	}
-	return err
-	// >>>>>>>>>>>>>
-
-	// if errjob == nil {
-	//  return nil
-	// }
-
-	// triggerID, ok := ctx.TriggerID()
-	// if !ok {
-	// 	return nil
-	// }
-
-	// sched := jobs.System()
-	// t, err := sched.GetTrigger(ctx.Domain(), triggerID)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// lastJob, err := scheduler.GetLastJob(t)
-	// // if it is the first try we do not take into account an error, we bail.
-	// if err == scheduler.ErrNotFoundTrigger {
-	// 	return nil
-	// }
-	// if err != nil {
-	// 	return err
-	// }
-
-	// // if the last job was already errored, we bail.
-	// if lastJob.State == jobs.Errored {
-	// 	return nil
-	// }
-
-	// i, err := instance.Get(ctx.Domain())
-	// if err != nil {
-	// 	return err
-	// }
-
-	// konnectorURL := i.SubDomain(consts.CollectSlug)
-	// konnectorURL.Fragment = "/category/all/" + w.slug
-	// mail := mails.Options{
-	// 	Mode:         mails.ModeNoReply,
-	// 	TemplateName: "konnector_error",
-	// 	TemplateValues: map[string]string{
-	// 		"KonnectorName": w.slug,
-	// 		"KonnectorPage": konnectorURL.String(),
-	// 	},
-	// }
-
-	// msg, err := jobs.NewMessage(&mail)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// ctx.Logger().Info("Konnector has failed definitively, should send mail.", mail)
-	// _, err = jobs.System().PushJob(&jobs.JobRequest{
-	// 	Domain:     ctx.Domain(),
-	// 	WorkerType: "sendmail",
-	// 	Message:    msg,
-	// })
-	// return err
+	return nil
 }

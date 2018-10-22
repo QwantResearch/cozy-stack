@@ -3,6 +3,7 @@ package apps
 import (
 	"encoding/json"
 	"io"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -45,21 +46,6 @@ type Services map[string]*Service
 // Notifications is a map to define the notifications properties used by the
 // application.
 type Notifications map[string]notification.Properties
-
-// Locales is a map to define the available locales of the application.
-type Locales map[string]interface{}
-
-// Developer is the name and url of a developer.
-type Developer struct {
-	Name string `json:"name"`
-	URL  string `json:"url,omitempty"`
-}
-
-// Platform is a supported additional device platform of the application.
-type Platform struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
-}
 
 // Intent is a declaration of a service for other client-side apps
 type Intent struct {
@@ -170,6 +156,9 @@ func (m *WebappManifest) SetID(id string) {}
 // SetRev is part of the Manifest interface
 func (m *WebappManifest) SetRev(rev string) { m.DocRev = rev }
 
+// SetSource is part of the Manifest interface
+func (m *WebappManifest) SetSource(src *url.URL) { m.DocSource = src.String() }
+
 // Source is part of the Manifest interface
 func (m *WebappManifest) Source() string { return m.DocSource }
 
@@ -221,6 +210,20 @@ func (m *WebappManifest) Match(field, value string) bool {
 		return m.DocState == State(value)
 	}
 	return false
+}
+
+func (m *WebappManifest) NameLocalized(locale string) string {
+	if m.Locales != nil && locale != "" {
+		var locales map[string]struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(*m.Locales, &locales); err == nil {
+			if v, ok := locales[locale]; ok && v.Name != "" {
+				return v.Name
+			}
+		}
+	}
+	return m.Name
 }
 
 // ReadManifest is part of the Manifest interface
@@ -434,6 +437,17 @@ func GetWebappBySlug(db prefixer.Prefixer, slug string) (*WebappManifest, error)
 		return nil, err
 	}
 	return man, nil
+}
+
+// GetWebappBySlugAndUpdate fetch the WebappManifest and perform an update of
+// the application if necessary and if the application was installed from the
+// registry.
+func GetWebappBySlugAndUpdate(db prefixer.Prefixer, slug string, copier Copier, registries []*url.URL) (*WebappManifest, error) {
+	man, err := GetWebappBySlug(db, slug)
+	if err != nil {
+		return nil, err
+	}
+	return doLazyUpdate(db, man, man.AvailableVersion, copier, registries).(*WebappManifest), nil
 }
 
 // ListWebapps returns the list of installed web applications.

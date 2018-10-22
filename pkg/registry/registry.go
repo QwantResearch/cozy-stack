@@ -30,12 +30,40 @@ type Version struct {
 	TarPrefix string          `json:"tar_prefix"`
 }
 
-var errVersionNotFound = errors.New("Version not found")
-
-var proxyClient = &http.Client{
-	Timeout:   10 * time.Second,
-	Transport: httpcache.NewMemoryCacheTransport(32),
+// A MaintenanceOptions defines options about a maintenance
+type MaintenanceOptions struct {
+	FlagInfraMaintenance   bool `json:"flag_infra_maintenance"`
+	FlagShortMaintenance   bool `json:"flag_short_maintenance"`
+	FlagDisallowManualExec bool `json:"flag_disallow_manual_exec"`
 }
+
+// An Application describe an application on the registry
+type Application struct {
+	Slug                 string             `json:"slug"`
+	Type                 string             `json:"type"`
+	MaintenanceActivated bool               `json:"maintenance_activated,omitempty"`
+	MaintenanceOptions   MaintenanceOptions `json:"maintenance_options"`
+}
+
+var errVersionNotFound = errors.New("registry: version not found")
+var errApplicationNotFound = errors.New("registry: application not found")
+
+var (
+	proxyClient = &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: httpcache.NewMemoryCacheTransport(32),
+	}
+
+	appClient = &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: httpcache.NewMemoryCacheTransport(256),
+	}
+
+	latestVersionClient = &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: httpcache.NewMemoryCacheTransport(256),
+	}
+)
 
 // CacheControl defines whether or not to use caching for the request made to
 // the registries.
@@ -55,7 +83,7 @@ func GetLatestVersion(slug, channel string, registries []*url.URL) (*Version, er
 	requestURI := fmt.Sprintf("/registry/%s/%s/latest",
 		url.PathEscape(slug),
 		url.PathEscape(channel))
-	resp, ok, err := fetchUntilFound(registries, requestURI, WithCache)
+	resp, ok, err := fetchUntilFound(latestVersionClient, registries, requestURI, WithCache)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +98,29 @@ func GetLatestVersion(slug, channel string, registries []*url.URL) (*Version, er
 	return v, nil
 }
 
+// GetApplication returns an application from his slug
+func GetApplication(slug string, registries []*url.URL) (*Application, error) {
+	requestURI := fmt.Sprintf("/registry/%s/", slug)
+	resp, ok, err := fetchUntilFound(appClient, registries, requestURI, WithCache)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errApplicationNotFound
+	}
+	defer resp.Body.Close()
+	var app *Application
+	if err = json.NewDecoder(resp.Body).Decode(&app); err != nil {
+		return nil, err
+	}
+	return app, nil
+}
+
 // Proxy will proxy the given request to the registries in sequence and return
 // the response as io.ReadCloser when finding a registry returning a HTTP 200OK
 // response.
 func Proxy(req *http.Request, registries []*url.URL, cache CacheControl) (*http.Response, error) {
-	resp, ok, err := fetchUntilFound(registries, req.RequestURI, cache)
+	resp, ok, err := fetchUntilFound(proxyClient, registries, req.RequestURI, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +267,7 @@ func (a *appsList) fetch(r *registryFetchState, fetchAll bool) error {
 			"cursor", strconv.Itoa(cursor),
 			"limit", strconv.Itoa(limit),
 		)
-		resp, ok, err := fetch(r.url, ref, NoCache)
+		resp, ok, err := fetch(proxyClient, r.url, ref, NoCache)
 		if err != nil {
 			return err
 		}
@@ -363,13 +409,13 @@ func (a *appsList) Paginated(sortBy string, reverse bool, limit int) *appsPagina
 	}
 }
 
-func fetchUntilFound(registries []*url.URL, requestURI string, cache CacheControl) (resp *http.Response, ok bool, err error) {
+func fetchUntilFound(client *http.Client, registries []*url.URL, requestURI string, cache CacheControl) (resp *http.Response, ok bool, err error) {
 	ref, err := url.Parse(requestURI)
 	if err != nil {
 		return
 	}
 	for _, registry := range registries {
-		resp, ok, err = fetch(registry, ref, cache)
+		resp, ok, err = fetch(client, registry, ref, cache)
 		if err != nil {
 			return
 		}
@@ -381,7 +427,7 @@ func fetchUntilFound(registries []*url.URL, requestURI string, cache CacheContro
 	return nil, false, nil
 }
 
-func fetch(registry, ref *url.URL, cache CacheControl) (resp *http.Response, ok bool, err error) {
+func fetch(client *http.Client, registry, ref *url.URL, cache CacheControl) (resp *http.Response, ok bool, err error) {
 	u := registry.ResolveReference(ref)
 	u.Path = path.Join(registry.Path, ref.Path)
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
@@ -391,7 +437,7 @@ func fetch(registry, ref *url.URL, cache CacheControl) (resp *http.Response, ok 
 	if cache == NoCache {
 		req.Header.Set("cache-control", "no-cache")
 	}
-	resp, err = proxyClient.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
 		return
 	}

@@ -121,25 +121,28 @@ func (f *swiftCopier) Abort() error {
 	return err
 }
 
-func (f *swiftCopier) Commit() error {
+func (f *swiftCopier) Commit() (err error) {
 	objectNames, err := f.c.ObjectNamesAll(f.container, &swift.ObjectsOpts{
 		Prefix: f.tmpObj,
 	})
 	if err != nil {
 		return err
 	}
+	defer f.c.BulkDelete(f.container, objectNames)
+	// We check if the appObj has not been created concurrently by another
+	// copier.
+	_, _, err = f.c.Object(f.container, f.appObj)
+	if err == nil {
+		return nil
+	}
 	for _, srcObjectName := range objectNames {
 		dstObjectName := path.Join(f.appObj, strings.TrimPrefix(srcObjectName, f.tmpObj))
-		err = f.c.ObjectMove(f.container, srcObjectName, f.container, dstObjectName)
+		_, err = f.c.ObjectCopy(f.container, srcObjectName, f.container, dstObjectName, nil)
 		if err != nil {
-			return f.Abort()
+			return err
 		}
 	}
-	o, err := f.c.ObjectCreate(f.container, f.appObj, true, "", "", nil)
-	if err != nil {
-		return err
-	}
-	return o.Close()
+	return f.c.ObjectPutString(f.container, f.appObj, "", "text/plain")
 }
 
 // NewAferoCopier defines a copier using an afero.Fs filesystem to store the

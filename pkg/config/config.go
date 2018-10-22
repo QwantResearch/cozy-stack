@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -15,6 +16,8 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/cozy/cozy-stack/client/tlsclient"
+	"github.com/cozy/cozy-stack/pkg/cache"
 	"github.com/cozy/cozy-stack/pkg/keymgmt"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/utils"
@@ -115,7 +118,6 @@ type Config struct {
 	Jobs          Jobs
 	Konnectors    Konnectors
 	Mail          *gomail.DialerOptions
-	AutoUpdates   AutoUpdates
 	Notifications Notifications
 	Logger        logger.Options
 
@@ -125,11 +127,16 @@ type Config struct {
 	KonnectorsOauthStateStorage RedisConfig
 	Realtime                    RedisConfig
 
+	CacheStorage cache.Cache
+
 	Contexts   map[string]interface{}
 	Registries map[string][]*url.URL
 
 	CSPDisabled  bool
 	CSPWhitelist map[string]string
+
+	AssetsPollingDisabled bool
+	AssetsPollingInterval time.Duration
 }
 
 // Vault contains security keys used for various encryption or signing of
@@ -159,8 +166,9 @@ type Fs struct {
 
 // CouchDB contains the configuration values of the database
 type CouchDB struct {
-	Auth *url.Userinfo
-	URL  *url.URL
+	Auth   *url.Userinfo
+	URL    *url.URL
+	Client *http.Client
 }
 
 // Jobs contains the configuration values for the jobs and triggers
@@ -178,12 +186,6 @@ type Jobs struct {
 // Konnectors contains the configuration values for the konnectors
 type Konnectors struct {
 	Cmd string
-}
-
-// AutoUpdates contains the configuration values for auto updates
-type AutoUpdates struct {
-	Activated bool
-	Schedule  string
 }
 
 // Notifications contains the configuration for the mobile push-notification
@@ -379,6 +381,8 @@ func Setup(cfgFile string) (err error) {
 func applyDefaults(v *viper.Viper) {
 	v.SetDefault("password_reset_interval", defaultPasswordResetInterval)
 	v.SetDefault("jobs.imagemagick_convert_cmd", "convert")
+	v.SetDefault("assets_polling_disabled", false)
+	v.SetDefault("assets_polling_interval", 2*time.Minute)
 }
 
 func envMap() map[string]string {
@@ -415,6 +419,19 @@ func UseViper(v *viper.Viper) error {
 	}
 	if couchURL.Path == "" {
 		couchURL.Path = "/"
+	}
+	couchClient, _, err := tlsclient.NewHTTPClient(tlsclient.HTTPEndpoint{
+		Timeout:    10 * time.Second,
+		RootCAFile: v.GetString("couchdb.root_ca"),
+		ClientCertificateFiles: tlsclient.ClientCertificateFilePair{
+			CertificateFile: v.GetString("couchdb.client_cert"),
+			KeyFile:         v.GetString("couchdb.client_key"),
+		},
+		PinnedKey:              v.GetString("couchdb.pinned_key"),
+		InsecureSkipValidation: v.GetBool("couchdb.insecure_skip_validation"),
+	})
+	if err != nil {
+		return err
 	}
 
 	regs, err := makeRegistries(v)
@@ -490,6 +507,9 @@ func UseViper(v *viper.Viper) error {
 	if err != nil {
 		return err
 	}
+
+	// cache entry is optional
+	cacheRedis, _ := GetRedisConfig(v, redisOptions, "cache", "url")
 
 	adminSecretFile := v.GetString("admin.secret_filename")
 	if adminSecretFile == "" {
@@ -582,16 +602,13 @@ func UseViper(v *viper.Viper) error {
 			URL: fsURL,
 		},
 		CouchDB: CouchDB{
-			Auth: couchAuth,
-			URL:  couchURL,
+			Auth:   couchAuth,
+			URL:    couchURL,
+			Client: couchClient,
 		},
 		Jobs: jobs,
 		Konnectors: Konnectors{
 			Cmd: v.GetString("konnectors.cmd"),
-		},
-		AutoUpdates: AutoUpdates{
-			Activated: v.GetString("auto_updates.schedule") != "",
-			Schedule:  v.GetString("auto_updates.schedule"),
 		},
 		Notifications: Notifications{
 			Development: v.GetBool("notifications.development"),
@@ -608,6 +625,7 @@ func UseViper(v *viper.Viper) error {
 		DownloadStorage:             downloadRedis,
 		KonnectorsOauthStateStorage: konnectorsOauthStateRedis,
 		Realtime:                    realtimeRedis,
+		CacheStorage:                cache.New(cacheRedis.Client()),
 		Logger: logger.Options{
 			Level:  v.GetString("log.level"),
 			Syslog: v.GetBool("log.syslog"),
@@ -625,6 +643,9 @@ func UseViper(v *viper.Viper) error {
 		Registries: regs,
 
 		CSPWhitelist: v.GetStringMapString("csp_whitelist"),
+
+		AssetsPollingDisabled: v.GetBool("assets_polling_disabled"),
+		AssetsPollingInterval: v.GetDuration("assets_polling_interval"),
 	}
 
 	if IsDevRelease() && v.GetBool("disable_csp") {
@@ -730,6 +751,8 @@ func createTestViper() *viper.Viper {
 	v.SetDefault("fs.url", "mem://test")
 	v.SetDefault("couchdb.url", "http://localhost:5984/")
 	v.SetDefault("log.level", "info")
+	v.SetDefault("assets_polling_disabled", false)
+	v.SetDefault("assets_polling_interval", 2*time.Minute)
 	applyDefaults(v)
 	return v
 }

@@ -20,7 +20,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 
 	// import workers
-	_ "github.com/cozy/cozy-stack/pkg/workers/exec"
+	"github.com/cozy/cozy-stack/pkg/workers/exec"
 	_ "github.com/cozy/cozy-stack/pkg/workers/indexupdate"
 	_ "github.com/cozy/cozy-stack/pkg/workers/log"
 	_ "github.com/cozy/cozy-stack/pkg/workers/mails"
@@ -232,7 +232,7 @@ func getTrigger(c echo.Context) error {
 		return err
 	}
 	tInfos := t.Infos()
-	tInfos.CurrentState, err = jobs.GetTriggerState(t)
+	tInfos.CurrentState, err = jobs.GetTriggerState(t, t.ID())
 	if err != nil {
 		return wrapJobsError(err)
 	}
@@ -257,7 +257,7 @@ func getTriggerState(c echo.Context) error {
 		}
 	}
 
-	state, err := jobs.GetTriggerState(t)
+	state, err := jobs.GetTriggerState(t, t.ID())
 	if err != nil {
 		return wrapJobsError(err)
 	}
@@ -272,9 +272,7 @@ func extractKonnectorPermissions(c echo.Context, i *instance.Instance, t jobs.Tr
 	if err != nil {
 		return
 	}
-	var msg struct {
-		Konnector string `json:"konnector"`
-	}
+	var msg exec.KonnectorMessage
 	if err = t.Infos().Message.Unmarshal(&msg); err != nil {
 		return
 	}
@@ -329,7 +327,7 @@ func getTriggerJobs(c echo.Context) error {
 		return err
 	}
 
-	js, err := jobs.GetJobs(t, limit)
+	js, err := jobs.GetJobs(t, t.ID(), limit)
 	if err != nil {
 		return wrapJobsError(err)
 	}
@@ -405,7 +403,7 @@ func getAllTriggers(c echo.Context) error {
 	for _, t := range ts {
 		tInfos := t.Infos()
 		if workerType == "" || tInfos.WorkerType == workerType {
-			tInfos.CurrentState, err = jobs.GetTriggerState(t)
+			tInfos.CurrentState, err = jobs.GetTriggerState(t, t.ID())
 			if err != nil {
 				return wrapJobsError(err)
 			}

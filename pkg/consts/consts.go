@@ -3,13 +3,14 @@ package consts
 // Instances doc type for User's instance document
 const Instances = "instances"
 
+// Configs doc type assets documents configuration
+const Configs = "configs"
+
 const (
 	// Apps doc type for client-side application manifests
 	Apps = "io.cozy.apps"
 	// Konnectors doc type for konnector application manifests
 	Konnectors = "io.cozy.konnectors"
-	// KonnectorResults doc type for konnector last execution result
-	KonnectorResults = "io.cozy.konnectors.result"
 	// Versions doc type for apps versions from the registries
 	Versions = "io.cozy.registry.versions"
 	// KonnectorLogs doc type for konnector last execution logs.
