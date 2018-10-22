@@ -133,7 +133,11 @@ func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string 
 
 func GetIndex(docType string, lang string) (*bleve.Index, error) {
 	indexMapping := bleve.NewIndexMapping()
-	AddTypeMapping(indexMapping, docType, lang)
+	err := AddTypeMapping(indexMapping, docType, lang)
+	if err != nil {
+		fmt.Printf("Error on adding type mapping: %s\n", err)
+		return nil, err
+	}
 
 	fullIndexPath := prefixPath + lang + "/" + docType
 

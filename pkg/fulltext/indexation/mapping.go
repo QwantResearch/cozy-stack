@@ -1,116 +1,136 @@
 package indexation
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+
 	"github.com/blevesearch/bleve"
+	"github.com/blevesearch/bleve/analysis/analyzer/keyword"
 	"github.com/blevesearch/bleve/analysis/lang/en"
 	"github.com/blevesearch/bleve/analysis/lang/fr"
 	"github.com/blevesearch/bleve/mapping"
-	"github.com/cozy/cozy-stack/pkg/consts"
 	// "github.com/blevesearch/bleve/analysis/analyzer/simple" // Might be useful to check for other Analyzers (maybe make one ourselves)
+)
+
+const (
+	MappingDescriptionPath = "bleve/mapping_description.json"
 )
 
 func GetAvailableLanguages() []string {
 	return []string{fr.AnalyzerName, en.AnalyzerName}
+
+	//TODO: store language in mapping description? (per doctype?)
 }
 
-func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string) {
+func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string) error {
 
-	// For each type of document, don't forget to Add Document Disable Mapping on useless fields
-	// It affects performances a lot
-
-	switch docType {
-	case consts.PhotosAlbums:
-		indexMapping = AddPhotoAlbumMapping(indexMapping, lang)
-		break
-	case consts.Files:
-		indexMapping = AddFileMapping(indexMapping, lang)
-		break
-	case "io.cozy.bank.accounts":
-		indexMapping = AddBankAccountMapping(indexMapping, lang)
-		break
+	mappingDescription, err := GetDocTypeMappingFromDescriptionFile(docType)
+	if err != nil {
+		fmt.Printf("Error on getting mapping description: %s\n", err)
+		return err
 	}
+
+	documentMapping := bleve.NewDocumentMapping()
+
+	// We set dynamic to false to ignore all fields by default.
+	// See: https://groups.google.com/forum/#!searchin/bleve/dynamic|sort:date/bleve/XeztWQOlT7o/BZ4WvhqhBwAJ
+	documentMapping.Dynamic = false
+
+	AddFieldMappingsFromDescription(documentMapping, mappingDescription, lang)
+
+	// Add docType field mapping, as keyword, common to all doctypes
+	keywordFieldMapping, err := CreateFieldMapping("keywordField", lang)
+	if err != nil {
+		fmt.Printf("Error when creating keywordFielMapping for docType: %s\n", err)
+		return err
+	}
+	documentMapping.AddFieldMappingsAt("docType", keywordFieldMapping)
+
+	indexMapping.AddDocumentMapping(docType, documentMapping)
 	indexMapping.TypeField = "docType"
+
+	return nil
 }
 
-func AddPhotoAlbumMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
-	photosAlbumMapping := bleve.NewDocumentMapping()
+func AddFieldMappingsFromDescription(documentMapping *mapping.DocumentMapping, mappingDescription map[string]interface{}, lang string) error {
 
-	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	englishTextFieldMapping.Analyzer = lang
-	// englishTextFieldMapping.IncludeInAll = true
+	// mappingDescription must be either string or map[string]interface{}
+	// In the first case we create the corresponding mapping field and add it to the documentMapping
+	// In the second case we create a subdocument and call this function recursivelyon it
 
-	photosAlbumMapping.AddFieldMappingsAt("name", englishTextFieldMapping)
+	for fieldName, fieldMapping := range mappingDescription {
+		fieldMappingString, ok := fieldMapping.(string)
+		if !ok {
+			fieldMappingMap, ok := fieldMapping.(map[string]interface{})
+			if !ok {
+				err := errors.New("The field '" + fieldName + "' from the description file is neither string nor nested map[string]interface{}.")
+				fmt.Printf("Error on parsing mapping description json file: %s\n", err)
+				return err
+			}
+			// Nested structure: call this function recursively
+			subDocumentMapping := bleve.NewDocumentMapping()
+			err := AddFieldMappingsFromDescription(subDocumentMapping, fieldMappingMap, lang)
+			if err != nil {
+				return err
+			}
+			documentMapping.AddSubDocumentMapping(fieldName, subDocumentMapping)
+		} else {
+			newFieldMapping, err := CreateFieldMapping(fieldMappingString, lang)
+			if err != nil {
+				fmt.Printf("Error on creating mapping: %s\n", err)
+				return err
+			}
+			documentMapping.AddFieldMappingsAt(fieldName, newFieldMapping)
+		}
+	}
 
-	indexMapping.AddDocumentMapping(consts.PhotosAlbums, photosAlbumMapping)
-
-	return indexMapping
+	return nil
 }
 
-func AddFileMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
-	fileMapping := bleve.NewDocumentMapping()
+func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{}, error) {
+	var mapping map[string]map[string]interface{}
 
-	// Type fields mapping
-	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	englishTextFieldMapping.Analyzer = lang
-	englishTextFieldMapping.IncludeInAll = true
+	mappingDescriptionFile, err := ioutil.ReadFile(MappingDescriptionPath)
+	if err != nil {
+		fmt.Printf("Error on getting description file: %s\n", err)
+		return nil, err
+	}
 
-	fileMapping.AddFieldMappingsAt("name", englishTextFieldMapping)
-	fileMapping.AddFieldMappingsAt("tags", englishTextFieldMapping)
+	err = json.Unmarshal(mappingDescriptionFile, &mapping)
+	if err != nil {
+		fmt.Printf("Error on unmarshalling: %s\n", err)
+		return nil, err
+	}
 
-	dateMapping := bleve.NewDateTimeFieldMapping()
-
-	fileMapping.AddFieldMappingsAt("created_at", dateMapping)
-	fileMapping.AddFieldMappingsAt("updated_at", dateMapping)
-	// TODO: check tag mapping (knowing it's an array)
-
-	// store field only
-	storeFieldMapping := bleve.NewTextFieldMapping()
-	storeFieldMapping.Index = false
-	storeFieldMapping.Store = true
-	fileMapping.AddFieldMappingsAt("_rev", storeFieldMapping)
-
-	// Ignore fields mapping
-	ignoreMapping := bleve.NewDocumentDisabledMapping()
-	fileMapping.AddSubDocumentMapping("metadata", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("referenced_by", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("_id", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("class", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("executable", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("mime", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("trashed", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("type", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("dir_id", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("size", ignoreMapping)
-	fileMapping.AddSubDocumentMapping("md5sum", ignoreMapping)
-
-	indexMapping.AddDocumentMapping(consts.Files, fileMapping)
-
-	return indexMapping
+	return mapping[docType], nil
 }
 
-func AddBankAccountMapping(indexMapping *mapping.IndexMappingImpl, lang string) *mapping.IndexMappingImpl {
-	BankAccountMapping := bleve.NewDocumentMapping()
+func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping, error) {
+	switch mappingType {
+	case "textField":
+		textFieldMapping := bleve.NewTextFieldMapping()
+		textFieldMapping.Analyzer = lang
+		textFieldMapping.IncludeInAll = true
+		return textFieldMapping, nil
+	case "keywordField":
+		keywordFieldMapping := bleve.NewTextFieldMapping()
+		keywordFieldMapping.Analyzer = keyword.Name
+		return keywordFieldMapping, nil
+	case "numberField":
+		numberMapping := bleve.NewNumericFieldMapping()
+		return numberMapping, nil
+	case "dateField":
+		dateMapping := bleve.NewDateTimeFieldMapping()
+		return dateMapping, nil
+	case "storeField":
+		storeFieldMapping := bleve.NewTextFieldMapping()
+		storeFieldMapping.Index = false
+		storeFieldMapping.Store = true
+		return storeFieldMapping, nil
+	}
 
-	englishTextFieldMapping := bleve.NewTextFieldMapping()
-	englishTextFieldMapping.Analyzer = lang
-	englishTextFieldMapping.IncludeInAll = true
-
-	simpleMapping := bleve.NewTextFieldMapping()
-	// Todo: check it is actually without analyzer
-
-	numberMapping := bleve.NewNumericFieldMapping()
-
-	BankAccountMapping.AddFieldMappingsAt("label", englishTextFieldMapping)
-	BankAccountMapping.AddFieldMappingsAt("institutionLabel", englishTextFieldMapping)
-	BankAccountMapping.AddFieldMappingsAt("balance", numberMapping)
-	BankAccountMapping.AddFieldMappingsAt("type", englishTextFieldMapping)
-	BankAccountMapping.AddFieldMappingsAt("number", simpleMapping)
-	BankAccountMapping.AddFieldMappingsAt("iban", simpleMapping)
-	BankAccountMapping.AddFieldMappingsAt("serviceID", numberMapping) // Todo : test when is undefined
-
-	indexMapping.AddDocumentMapping("io.cozy.bank.accounts", BankAccountMapping)
-
-	return indexMapping
+	// nothing matched, we return an error
+	return nil, errors.New("The Mapping Field " + mappingType + " doesn't correspond to any of the known mapping fields.")
 }
-
-// Todo: io.cozy.bank.operations

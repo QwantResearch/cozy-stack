@@ -1,0 +1,21 @@
+{
+    "io.cozy.bank.accounts": {
+        "label": "textField",
+        "institutionLabel": "textField",
+        "balance": "numberField",
+        "type": "textField",
+        "number": "keywordField",
+        "iban": "keywordField",
+        "serviceID": "numberField"
+    },
+    "io.cozy.files": {
+        "name": "textField",
+        "tags": "keywordField",
+        "created_at": "dateField",
+        "updated_at": "dateField",
+        "_rev": "storeField"
+    }, 
+    "io.cozy.photos.albums": {
+        "name": "textField"
+    }
+}
