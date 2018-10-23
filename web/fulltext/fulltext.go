@@ -2,6 +2,7 @@ package fulltext
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -14,7 +15,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/fulltext/indexation"
 	"github.com/cozy/cozy-stack/pkg/fulltext/search"
 	// "github.com/cozy/cozy-stack/web/permissions"
-	// "github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/echo"
 )
 
@@ -44,17 +44,9 @@ func SearchQuery(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, total, _ := search.QueryIndex(request)
+	results, _, _ := search.QueryIndex(request)
 
-	out := make([]jsonapi.Object, len(results))
-	for i, result := range results {
-		fmt.Println(result.Name)
-		out[i] = &results[i]
-	}
-
-	// TODO : return the right needed infos
-	return jsonapi.DataListWithTotal(c, http.StatusOK, total, out, nil)
-
+	return c.JSON(http.StatusOK, map[string]interface{}{"results": results, "query": findRequest})
 }
 
 func SearchQueryPrefix(c echo.Context) error {
@@ -64,7 +56,9 @@ func SearchQueryPrefix(c echo.Context) error {
 
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
 		fmt.Printf("Error on decoding request: %s\n", err)
-		return jsonapi.NewError(http.StatusBadRequest, "Could not decode the request")
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request"),
+		})
 	}
 
 	// TODO : see how to deal with permissions
@@ -75,17 +69,9 @@ func SearchQueryPrefix(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, total, _ := search.QueryPrefixIndex(request)
+	results, _, _ := search.QueryPrefixIndex(request)
 
-	out := make([]jsonapi.Object, len(results))
-	for i, result := range results {
-		fmt.Println(result.Name)
-		out[i] = &results[i]
-	}
-
-	// TODO : return the right needed infos
-	return jsonapi.DataListWithTotal(c, http.StatusOK, total, out, nil)
-
+	return c.JSON(http.StatusOK, map[string]interface{}{"results": results, "query": findRequest})
 }
 
 func Reindex(c echo.Context) error {
@@ -99,21 +85,24 @@ func Reindex(c echo.Context) error {
 	err := indexation.ReIndex()
 	if err != nil {
 		fmt.Printf("Error on opening index: %s\n", err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
-	return jsonapi.DataList(c, http.StatusOK, nil, nil)
-
+	return c.JSON(http.StatusOK, nil)
 }
 
 func IndexUpdate(c echo.Context) error {
 
 	err := indexation.AllIndexesUpdate()
 	if err != nil {
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
-	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+	return c.JSON(http.StatusOK, nil)
 
 }
 
@@ -133,34 +122,44 @@ func ReplicateIndex(c echo.Context) error {
 	err := os.MkdirAll(path, 0700)
 	if err != nil {
 		fmt.Println(err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
 	tmpFile, err := ioutil.TempFile(path, "store.tmp.")
 	if err != nil {
 		fmt.Println(err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
 	_, err = io.Copy(tmpFile, c.Request().Body)
 	if err != nil {
 		fmt.Println(err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
 	err = tmpFile.Close()
 	if err != nil {
 		fmt.Println(err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
 	err = os.Rename(tmpFile.Name(), path+"/store")
 	if err != nil {
 		fmt.Println(err)
-		return jsonapi.DataList(c, http.StatusInternalServerError, nil, nil)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
 	}
 
-	return jsonapi.DataList(c, http.StatusOK, nil, nil)
+	return c.JSON(http.StatusOK, nil)
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {

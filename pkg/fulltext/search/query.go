@@ -1,14 +1,11 @@
 package search
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/blevesearch/bleve"
-	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/web/jsonapi"
 )
 
 type QueryRequest struct {
@@ -22,23 +19,12 @@ type QueryRequest struct {
 }
 
 type SearchResult struct {
-	id        string              `json:"_id"`
-	docType   string              `json:"docType"`
-	rev       string              `json:"_rev"`
+	Id        string              `json:"_id"`
+	DocType   string              `json:"_type"`
+	Rev       string              `json:"_rev"`
 	Name      string              `json:"name"`
-	Highlight map[string][]string `json:"highlight"`
+	Highlight map[string][]string `json:"html_highlight"`
 }
-
-func (r *SearchResult) Rev() string                            { return r.rev }
-func (r *SearchResult) ID() string                             { return r.id }
-func (r *SearchResult) DocType() string                        { return r.docType }
-func (r *SearchResult) Clone() couchdb.Doc                     { cloned := *r; return &cloned }
-func (r *SearchResult) SetRev(rev string)                      { r.rev = rev }
-func (r *SearchResult) SetID(id string)                        { r.id = id }
-func (r *SearchResult) Relationships() jsonapi.RelationshipMap { return nil }
-func (r *SearchResult) Included() []jsonapi.Object             { return []jsonapi.Object{} }
-func (r *SearchResult) MarshalJSON() ([]byte, error)           { return json.Marshal(*r) }
-func (r *SearchResult) Links() *jsonapi.LinksList              { return nil }
 
 const (
 	SearchPrefixPath = "bleve/query/"
@@ -192,7 +178,7 @@ func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []Sea
 			currFetched.Name = result.Fields["name"].(string)
 		}
 		if request.Rev {
-			currFetched.SetRev(result.Fields["_rev"].(string))
+			currFetched.Rev = result.Fields["_rev"].(string)
 		}
 		// currFetched := SearchResult{result.ID, (result.Fields["_rev"]).(string), (result.Fields["docType"]).(string), (result.Fields["name"]).(string), result.Fragments["name"][0]}
 		fetched[i] = currFetched
