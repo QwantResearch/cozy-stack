@@ -158,5 +158,7 @@ security features. Please do not use this binary as your production server.
 	results, _, _ := search.QueryIndex(request)
 	fmt.Println(results)
 
+	indexation.StartWorker()
+
 	return
 }

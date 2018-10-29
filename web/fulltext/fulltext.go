@@ -22,6 +22,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_search", SearchQuery)
 	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
+	router.POST("/_all_indexes_update", AllIndexesUpdate)
 	router.POST("/_index_update", IndexUpdate)
 	router.POST("/_update_index_alias/:doctype/:lang", ReplicateIndex)
 }
@@ -93,7 +94,7 @@ func Reindex(c echo.Context) error {
 	return c.JSON(http.StatusOK, nil)
 }
 
-func IndexUpdate(c echo.Context) error {
+func AllIndexesUpdate(c echo.Context) error {
 
 	err := indexation.AllIndexesUpdate()
 	if err != nil {
@@ -104,6 +105,33 @@ func IndexUpdate(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, nil)
 
+}
+
+func IndexUpdate(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request"),
+		})
+	}
+
+	if doctypeUpdate, ok := body["docTypes"].([]interface{}); ok {
+		doctypeUpdateList := make([]string, len(doctypeUpdate))
+		for i, d := range doctypeUpdate {
+			doctypeUpdateList[i] = d.(string)
+		}
+		err := indexation.AddUpdateIndexJobs(doctypeUpdateList)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, echo.Map{
+				"error": err.Error(),
+			})
+		}
+	} // Else...
+
+	return c.JSON(http.StatusOK, nil)
 }
 
 func ReplicateIndex(c echo.Context) error {

@@ -2,6 +2,7 @@ package indexation
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -65,6 +66,8 @@ var languages []string
 var prefixPath string
 
 var ft_language *FastText
+
+var updateQueue chan string
 
 func StartIndex(instance *instance.Instance) error {
 
@@ -176,6 +179,18 @@ func AllIndexesUpdate() error {
 		fmt.Println(docIndexes.docType, "updated")
 	}
 	return nil
+}
+
+func IndexUpdateDoctype(docType string) error {
+
+	for _, docIndexes := range indexes {
+		if docIndexes.docType == docType {
+			return IndexUpdate(docIndexes)
+		}
+	}
+	err := errors.New("doctype " + docType + " index not found.")
+	fmt.Printf("%s\n", err)
+	return err
 }
 
 func IndexUpdate(docIndexes documentIndexes) error {
@@ -408,4 +423,27 @@ func SetStoreSeq(index *bleve.Index, rev string) {
 func GetStoreSeq(index *bleve.Index) (string, error) {
 	res, err := (*index).GetInternal([]byte("seq"))
 	return string(res), err
+}
+
+func StartWorker() {
+
+	updateQueue = make(chan string, 10)
+
+	go func(updateQueue <-chan string) {
+		for docType := range updateQueue {
+			IndexUpdateDoctype(docType) // TODO: deal with errors
+		}
+	}(updateQueue)
+}
+
+func AddUpdateIndexJobs(doctypeUpdateList []string) error {
+	for _, docType := range doctypeUpdateList {
+		select {
+		case updateQueue <- docType:
+			continue
+		default:
+			return errors.New("Update Queue is full, can't add new doctype to the update queue for now (docTypes before " + docType + " were correctly added to update queue).")
+		}
+	}
+	return nil
 }
