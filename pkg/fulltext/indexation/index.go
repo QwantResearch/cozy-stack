@@ -170,15 +170,12 @@ func GetIndex(docType string, lang string) (*bleve.Index, error) {
 }
 
 func AllIndexesUpdate() error {
-	for _, docIndexes := range indexes {
-		err := IndexUpdate(docIndexes)
-		if err != nil {
-			continue
-			// return err // TODO : change behaviour so that we don't ignore this error
-		}
-		fmt.Println(docIndexes.docType, "updated")
+	allDocTypes := make([]string, len(indexes))
+	for i, docIndexes := range indexes {
+		allDocTypes[i] = docIndexes.docType
 	}
-	return nil
+
+	return AddUpdateIndexJobs(allDocTypes)
 }
 
 func IndexUpdateDoctype(docType string) error {
@@ -312,8 +309,7 @@ func ReIndex() error {
 			}
 		}
 
-		IndexUpdate(docIndexes)
-
+		AddUpdateIndexJobs([]string{docIndexes.docType})
 	}
 
 	return nil
