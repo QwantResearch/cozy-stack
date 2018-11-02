@@ -58,7 +58,7 @@ func SearchQueryPrefix(c echo.Context) error {
 	if err := json.NewDecoder(c.Request().Body).Decode(&findRequest); err != nil {
 		fmt.Printf("Error on decoding request: %s\n", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
-			"error": errors.New("Could not decode the request"),
+			"error": errors.New("Could not decode the request").Error(),
 		})
 	}
 
@@ -114,22 +114,25 @@ func IndexUpdate(c echo.Context) error {
 	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
 		fmt.Printf("Error on decoding request: %s\n", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
-			"error": errors.New("Could not decode the request"),
+			"error": errors.New("Could not decode the request").Error(),
 		})
 	}
 
-	if doctypeUpdate, ok := body["docTypes"].([]interface{}); ok {
-		doctypeUpdateList := make([]string, len(doctypeUpdate))
-		for i, d := range doctypeUpdate {
-			doctypeUpdateList[i] = d.(string)
-		}
-		err := indexation.AddUpdateIndexJobs(doctypeUpdateList)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, echo.Map{
-				"error": err.Error(),
-			})
-		}
-	} // Else...
+	var doctypeUpdate string
+	var ok bool
+	if doctypeUpdate, ok = body["docType"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("docType string field required.").Error(),
+		})
+	}
+	// TODO : fetch userID
+
+	err := indexation.AddUpdateIndexJob(doctypeUpdate)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.JSON(http.StatusOK, nil)
 }

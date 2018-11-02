@@ -107,6 +107,31 @@ func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{
 	return mapping[docType], nil
 }
 
+func GetDocTypeListFromDescriptionFile() ([]string, error) {
+	var mapping map[string]interface{}
+
+	mappingDescriptionFile, err := ioutil.ReadFile(MappingDescriptionPath)
+	if err != nil {
+		fmt.Printf("Error on getting description file: %s\n", err)
+		return nil, err
+	}
+
+	err = json.Unmarshal(mappingDescriptionFile, &mapping)
+	if err != nil {
+		fmt.Printf("Error on unmarshalling: %s\n", err)
+		return nil, err
+	}
+
+	docTypeList := make([]string, len(mapping))
+	i := 0
+	for key := range mapping {
+		docTypeList[i] = key
+		i++
+	}
+
+	return docTypeList, nil
+}
+
 func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping, error) {
 	switch mappingType {
 	case "textField":
