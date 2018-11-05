@@ -9,13 +9,14 @@ import (
 )
 
 type QueryRequest struct {
-	QueryString string   `json:"queryString"`
-	NumbResults int      `json:"numbResults"`
-	Highlight   bool     `json:"highlight"`
-	Name        bool     `json:"name"`
-	Rev         bool     `json:"_rev"`
-	Offset      int      `json:"offset"`
-	DocTypes    []string `json:"docTypes"`
+	QueryString  string   `json:"queryString"`
+	NumbResults  int      `json:"numbResults"`
+	Highlight    bool     `json:"highlight"`
+	Name         bool     `json:"name"`
+	Rev          bool     `json:"_rev"`
+	Offset       int      `json:"offset"`
+	DocTypes     []string `json:"docTypes"`
+	InstanceName string   `json:"instance"`
 }
 
 type SearchResult struct {
@@ -30,7 +31,7 @@ const (
 	SearchPrefixPath = "bleve/query/"
 )
 
-func OpenIndexAlias(docTypeList []string) (bleve.IndexAlias, []*bleve.Index, error) {
+func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []*bleve.Index, error) {
 
 	// Deal with languages and docTypes dynamically instead
 	languages := []string{"fr", "en"}
@@ -41,7 +42,7 @@ func OpenIndexAlias(docTypeList []string) (bleve.IndexAlias, []*bleve.Index, err
 
 	for _, lang := range languages {
 		for _, docType := range docTypeList {
-			path := SearchPrefixPath + lang + "/" + docType
+			path := SearchPrefixPath + instName + "/" + lang + "/" + docType
 			index, err := bleve.Open(path)
 			if err == bleve.ErrorIndexMetaMissing {
 				CreateMetaIndexJson(path)
@@ -72,7 +73,7 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	start := time.Now()
 
-	indexAlias, indexes, err := OpenIndexAlias(request.DocTypes)
+	indexAlias, indexes, err := OpenIndexAlias(request.InstanceName, request.DocTypes)
 	if err != nil {
 		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err
@@ -106,7 +107,7 @@ func PreparingQuery(queryString string) string {
 
 func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
-	indexAlias, indexes, err := OpenIndexAlias(request.DocTypes)
+	indexAlias, indexes, err := OpenIndexAlias(request.InstanceName, request.DocTypes)
 	if err != nil {
 		fmt.Printf("Error when opening indexAlias: %s\n", err)
 		return nil, 0, err

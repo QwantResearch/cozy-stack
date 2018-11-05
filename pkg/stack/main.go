@@ -142,11 +142,11 @@ security features. Please do not use this binary as your production server.
 
 	// Start a bleve index
 	// TODO : clean the start-up (especially the instance part)
-	list, _ := instance.List()
-	db_name := list[0].Domain
-	db, _ := instance.Get(db_name)
+	indexation.StartWorker()
 
-	indexation.StartIndex(db)
+	list, _ := instance.List()
+
+	indexation.StartIndex(list)
 
 	request := search.QueryRequest{
 		QueryString: "qwant",
@@ -157,8 +157,6 @@ security features. Please do not use this binary as your production server.
 	}
 	results, _, _ := search.QueryIndex(request)
 	fmt.Println(results)
-
-	indexation.StartWorker()
 
 	return
 }

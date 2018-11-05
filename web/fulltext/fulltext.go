@@ -24,7 +24,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_reindex", Reindex)
 	router.POST("/_all_indexes_update", AllIndexesUpdate)
 	router.POST("/_index_update", IndexUpdate)
-	router.POST("/_update_index_alias/:doctype/:lang", ReplicateIndex)
+	router.POST("/_update_index_alias/:instance/:doctype/:lang", ReplicateIndex)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -83,7 +83,24 @@ func Reindex(c echo.Context) error {
 	// 	return err
 	// }
 
-	err := indexation.ReIndex()
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var instanceName string
+	var ok bool
+	if instanceName, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	err := indexation.ReIndex(instanceName)
 	if err != nil {
 		fmt.Printf("Error on opening index: %s\n", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -119,15 +136,21 @@ func IndexUpdate(c echo.Context) error {
 	}
 
 	var doctypeUpdate string
+	var userID string
 	var ok bool
 	if doctypeUpdate, ok = body["docType"].(string); !ok {
 		return c.JSON(http.StatusBadRequest, echo.Map{
 			"error": errors.New("docType string field required.").Error(),
 		})
 	}
-	// TODO : fetch userID
 
-	err := indexation.AddUpdateIndexJob(doctypeUpdate)
+	if userID, ok = body["userID"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("userID string field required.").Error(),
+		})
+	}
+
+	err := indexation.AddUpdateIndexJob(userID, doctypeUpdate)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
@@ -147,8 +170,9 @@ func ReplicateIndex(c echo.Context) error {
 
 	docType := c.Param("doctype")
 	lang := c.Param("lang")
+	instName := c.Param("instance")
 
-	path := search.SearchPrefixPath + lang + "/" + docType
+	path := search.SearchPrefixPath + instName + "/" + lang + "/" + docType
 
 	err := os.MkdirAll(path, 0700)
 	if err != nil {
@@ -196,7 +220,8 @@ func ReplicateIndex(c echo.Context) error {
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 
 	request := search.QueryRequest{
-		QueryString: mapJSONRequest["searchQuery"].(string),
+		QueryString:  mapJSONRequest["searchQuery"].(string), // TODO: Deal with errors
+		InstanceName: mapJSONRequest["instance"].(string),    // TODO: Deal with errors
 		// default values
 		NumbResults: 15,
 		Highlight:   true,
