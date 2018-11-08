@@ -48,7 +48,12 @@ func SearchQuery(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, _, _ := search.QueryIndex(request)
+	results, _, err := search.QueryIndex(request)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{"results": results, "query": findRequest})
 }
@@ -73,7 +78,12 @@ func SearchQueryPrefix(c echo.Context) error {
 
 	request := MakeRequest(findRequest)
 
-	results, _, _ := search.QueryPrefixIndex(request)
+	results, _, err := search.QueryPrefixIndex(request)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{"results": results, "query": findRequest})
 }

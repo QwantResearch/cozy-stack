@@ -577,14 +577,14 @@ func NotifyDeleteIndexQuery(instName string, docType string, lang string) error 
 
 func checkInstance(instName string) error {
 	if _, ok := indexes[instName]; !ok {
-		return errors.New("Instance not found in IndexUpdate")
+		return errors.New("Instance not found in CheckInstance")
 	}
 	return nil
 }
 
 func checkInstanceDocType(instName string, docType string) error {
 	if _, ok := indexes[instName].indexList[docType]; !ok {
-		return errors.New("DocType not found in IndexUpdate")
+		return errors.New("DocType not found in CheckInstanceDocType")
 	}
 	return nil
 }
