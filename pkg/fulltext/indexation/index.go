@@ -491,7 +491,7 @@ func GetStoreSeq(index *bleve.Index) (string, error) {
 	return string(res), err
 }
 
-func DeleteAllIndexesInstance(instName string) error {
+func DeleteAllIndexesInstance(instName string, querySide bool) error {
 
 	err := checkInstance(instName)
 	if err != nil {
@@ -499,7 +499,7 @@ func DeleteAllIndexesInstance(instName string) error {
 	}
 
 	for docType := range indexes[instName].indexList {
-		err := DeleteIndex(instName, docType)
+		err := DeleteIndex(instName, docType, querySide)
 		if err != nil {
 			return err
 		}
@@ -512,7 +512,7 @@ func DeleteAllIndexesInstance(instName string) error {
 	return os.RemoveAll(prefixPath + instName)
 }
 
-func DeleteIndex(instName string, docType string) error {
+func DeleteIndex(instName string, docType string, querySide bool) error {
 
 	err := checkInstance(instName)
 	if err != nil {
@@ -533,9 +533,44 @@ func DeleteIndex(instName string, docType string) error {
 		if err != nil {
 			return err
 		}
+		if querySide {
+			err = NotifyDeleteIndexQuery(instName, docType, lang)
+			if err != nil {
+				fmt.Printf("Error telling query to delete index: %s\n", err)
+				return err
+			}
+		}
 	}
 
 	delete(indexes[instName].indexList, docType)
+
+	return nil
+}
+
+func NotifyDeleteIndexQuery(instName string, docType string, lang string) error {
+
+	inst, err := instance.Get(instName)
+	if err != nil {
+		fmt.Printf("Error on getting instance from instance name: %s\n", err)
+		return err
+	}
+
+	opts := &request.Options{
+		Method:  http.MethodPost,
+		Scheme:  inst.Scheme(),
+		Domain:  inst.DomainName(),
+		Path:    "/fulltext/_delete_index_query/" + instName + "/" + docType + "/" + lang,
+		Headers: request.Headers{
+			// Deal with permissions
+		},
+		Body: nil,
+	}
+	_, err = request.Req(opts)
+	if err != nil {
+		fmt.Println("Error on POST request")
+		fmt.Println(err)
+		return err
+	}
 
 	return nil
 }

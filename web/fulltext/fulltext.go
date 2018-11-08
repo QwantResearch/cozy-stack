@@ -27,6 +27,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_update_index_alias/:instance/:doctype/:lang", ReplicateIndex)
 	router.POST("/_delete_index", DeleteIndex)
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
+	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -245,7 +246,12 @@ func DeleteIndex(c echo.Context) error {
 		})
 	}
 
-	err := indexation.DeleteIndex(instance, docType)
+	querySide := true
+	if _, ok := body["querySide"]; ok {
+		querySide = body["querySide"].(bool)
+	}
+
+	err := indexation.DeleteIndex(instance, docType, querySide)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
@@ -275,7 +281,30 @@ func DeleteAllIndexes(c echo.Context) error {
 		})
 	}
 
-	err := indexation.DeleteAllIndexesInstance(instance)
+	querySide := true
+	if _, ok := body["querySide"]; ok {
+		querySide = body["querySide"].(bool)
+	}
+
+	err := indexation.DeleteAllIndexesInstance(instance, querySide)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func DeleteIndexQuery(c echo.Context) error {
+
+	docType := c.Param("doctype")
+	lang := c.Param("lang")
+	instName := c.Param("instance")
+
+	path := search.SearchPrefixPath + instName + "/" + lang + "/" + docType
+
+	err := os.RemoveAll(path)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
