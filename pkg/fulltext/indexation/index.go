@@ -203,6 +203,16 @@ func AllIndexesUpdate() error {
 
 func IndexUpdate(instName string, docType string) error {
 
+	err := checkInstance(instName)
+	if err != nil {
+		return err
+	}
+
+	err = checkInstanceDocType(instName, docType)
+	if err != nil {
+		return err
+	}
+
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
 
@@ -303,10 +313,19 @@ func IndexUpdate(instName string, docType string) error {
 
 func ReIndex(instName string) error {
 
-	// Save indexes before reindexing
-	err := ReplicateAll(instName)
+	err := checkInstance(instName)
 	if err != nil {
-		return err
+		// Not existing already, try to initialize it
+		err = InitializeIndexes(instName)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Save indexes before reindexing
+		err = ReplicateAll(instName)
+		if err != nil {
+			return err
+		}
 	}
 
 	indexes[instName].indexMu.Lock()
@@ -356,6 +375,11 @@ func ReIndex(instName string) error {
 
 func ReplicateAll(instName string) error {
 
+	err := checkInstance(instName)
+	if err != nil {
+		return err
+	}
+
 	for docType := range indexes[instName].indexList {
 		for lang := range indexes[instName].indexList[docType] {
 			_, err := Replicate(instName, indexes[instName].indexList[docType][lang], prefixPath+instName+"/"+lang+"/"+docType)
@@ -370,6 +394,11 @@ func ReplicateAll(instName string) error {
 }
 
 func Replicate(instName string, index *bleve.Index, path string) (string, error) {
+
+	err := checkInstance(instName)
+	if err != nil {
+		return "", err
+	}
 
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
@@ -460,6 +489,69 @@ func SetStoreSeq(index *bleve.Index, rev string) {
 func GetStoreSeq(index *bleve.Index) (string, error) {
 	res, err := (*index).GetInternal([]byte("seq"))
 	return string(res), err
+}
+
+func DeleteAllIndexesInstance(instName string) error {
+
+	err := checkInstance(instName)
+	if err != nil {
+		return err
+	}
+
+	for docType := range indexes[instName].indexList {
+		err := DeleteIndex(instName, docType)
+		if err != nil {
+			return err
+		}
+	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
+	delete(indexes, instName)
+	return os.RemoveAll(prefixPath + instName)
+}
+
+func DeleteIndex(instName string, docType string) error {
+
+	err := checkInstance(instName)
+	if err != nil {
+		return err
+	}
+
+	err = checkInstanceDocType(instName, docType)
+	if err != nil {
+		return err
+	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
+	for lang := range indexes[instName].indexList[docType] {
+		(*indexes[instName].indexList[docType][lang]).Close()
+		err := os.RemoveAll(prefixPath + instName + "/" + lang + "/" + docType)
+		if err != nil {
+			return err
+		}
+	}
+
+	delete(indexes[instName].indexList, docType)
+
+	return nil
+}
+
+func checkInstance(instName string) error {
+	if _, ok := indexes[instName]; !ok {
+		return errors.New("Instance not found in IndexUpdate")
+	}
+	return nil
+}
+
+func checkInstanceDocType(instName string, docType string) error {
+	if _, ok := indexes[instName].indexList[docType]; !ok {
+		return errors.New("DocType not found in IndexUpdate")
+	}
+	return nil
 }
 
 func StartWorker() {

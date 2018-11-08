@@ -25,6 +25,8 @@ func Routes(router *echo.Group) {
 	router.POST("/_all_indexes_update", AllIndexesUpdate)
 	router.POST("/_index_update", IndexUpdate)
 	router.POST("/_update_index_alias/:instance/:doctype/:lang", ReplicateIndex)
+	router.POST("/_delete_index", DeleteIndex)
+	router.POST("/_delete_all_indexes", DeleteAllIndexes)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -209,6 +211,72 @@ func ReplicateIndex(c echo.Context) error {
 	err = os.Rename(tmpFile.Name(), path+"/store")
 	if err != nil {
 		fmt.Println(err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func DeleteIndex(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var docType string
+	var instance string
+	var ok bool
+	if docType, ok = body["docType"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("docType string field required.").Error(),
+		})
+	}
+
+	if instance, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	err := indexation.DeleteIndex(instance, docType)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func DeleteAllIndexes(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var instance string
+	var ok bool
+
+	if instance, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	err := indexation.DeleteAllIndexesInstance(instance)
+	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
 		})
