@@ -89,7 +89,7 @@ var ft_language *FastText
 
 var updateQueue chan updateIndexNotif
 
-func StartIndex(instanceList []*instance.Instance) error {
+func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []string) error {
 
 	instances = instanceList
 
@@ -100,10 +100,7 @@ func StartIndex(instanceList []*instance.Instance) error {
 
 	languages = GetAvailableLanguages()
 
-	docTypeList, err = GetDocTypeListFromDescriptionFile()
-	if err != nil {
-		return err
-	}
+	docTypeList = docTypeListInitialize
 
 	indexes = make(map[string]InstanceIndex)
 	for _, inst := range instances {

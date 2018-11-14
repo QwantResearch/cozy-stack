@@ -146,7 +146,7 @@ security features. Please do not use this binary as your production server.
 
 	list, _ := instance.List()
 
-	indexation.StartIndex(list)
+	indexation.StartIndex(list, []string{consts.PhotosAlbums})
 
 	request := search.QueryRequest{
 		QueryString: "qwant",

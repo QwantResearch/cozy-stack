@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"strings"
 
 	"github.com/blevesearch/bleve"
 	"github.com/blevesearch/bleve/analysis/analyzer/keyword"
@@ -106,24 +105,6 @@ func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{
 	}
 
 	return mapping, nil
-}
-
-func GetDocTypeListFromDescriptionFile() ([]string, error) {
-
-	files, err := ioutil.ReadDir(MappingDescriptionPath)
-	if err != nil {
-		fmt.Printf("Error on getting description files: %s\n", err)
-		return nil, err
-	}
-
-	var docTypeList []string
-	for _, f := range files {
-		if strings.HasSuffix(f.Name(), ".json") {
-			docTypeList = append(docTypeList, strings.TrimSuffix(f.Name(), ".json"))
-		}
-	}
-
-	return docTypeList, nil
 }
 
 func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping, error) {
