@@ -28,6 +28,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_delete_index", DeleteIndex)
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
 	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
+	router.POST("/_post_mapping/:doctype", PostMapping)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -316,6 +317,45 @@ func DeleteIndexQuery(c echo.Context) error {
 
 	err := os.RemoveAll(path)
 	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func PostMapping(c echo.Context) error {
+
+	docType := c.Param("doctype")
+
+	tmpFile, err := ioutil.TempFile(indexation.MappingDescriptionPath, "store.tmp.")
+	if err != nil {
+		fmt.Println(err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	_, err = io.Copy(tmpFile, c.Request().Body)
+	if err != nil {
+		fmt.Println(err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	err = tmpFile.Close()
+	if err != nil {
+		fmt.Println(err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	err = os.Rename(tmpFile.Name(), indexation.MappingDescriptionPath+docType+".json")
+	if err != nil {
+		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
 		})
