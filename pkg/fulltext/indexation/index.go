@@ -138,6 +138,7 @@ func initializeIndexDocType(instName string, docType string) error {
 	// Call only inside a mutex lock
 	// indexes[instName] must be set
 
+	var err error
 	indexes[instName].indexList[docType] = make(map[string]*bleve.Index, len(languages))
 	for _, lang := range languages {
 		indexes[instName].indexList[docType][lang], err = getIndex(instName, docType, lang)
