@@ -12,7 +12,7 @@
 /tests/pouchdb-integration/replication-target
 /tests/sharing/tmp
 /bleve/*
-!/bleve/mapping_description.json
+!/bleve/mapping_description/
 /pkg/workers/exec/konnector_test*.local
 
 *.log

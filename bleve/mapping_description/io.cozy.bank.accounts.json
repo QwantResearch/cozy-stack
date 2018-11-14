@@ -1,0 +1,9 @@
+{
+    "label": "textField",
+    "institutionLabel": "textField",
+    "balance": "numberField",
+    "type": "textField",
+    "number": "keywordField",
+    "iban": "keywordField",
+    "serviceID": "numberField"
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"strings"
 
 	"github.com/blevesearch/bleve"
 	"github.com/blevesearch/bleve/analysis/analyzer/keyword"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	MappingDescriptionPath = "bleve/mapping_description.json"
+	MappingDescriptionPath = "bleve/mapping_description/"
 )
 
 func GetAvailableLanguages() []string {
@@ -90,9 +91,9 @@ func AddFieldMappingsFromDescription(documentMapping *mapping.DocumentMapping, m
 }
 
 func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{}, error) {
-	var mapping map[string]map[string]interface{}
+	var mapping map[string]interface{}
 
-	mappingDescriptionFile, err := ioutil.ReadFile(MappingDescriptionPath)
+	mappingDescriptionFile, err := ioutil.ReadFile(MappingDescriptionPath + docType + ".json")
 	if err != nil {
 		fmt.Printf("Error on getting description file: %s\n", err)
 		return nil, err
@@ -104,29 +105,22 @@ func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{
 		return nil, err
 	}
 
-	return mapping[docType], nil
+	return mapping, nil
 }
 
 func GetDocTypeListFromDescriptionFile() ([]string, error) {
-	var mapping map[string]interface{}
 
-	mappingDescriptionFile, err := ioutil.ReadFile(MappingDescriptionPath)
+	files, err := ioutil.ReadDir(MappingDescriptionPath)
 	if err != nil {
-		fmt.Printf("Error on getting description file: %s\n", err)
+		fmt.Printf("Error on getting description files: %s\n", err)
 		return nil, err
 	}
 
-	err = json.Unmarshal(mappingDescriptionFile, &mapping)
-	if err != nil {
-		fmt.Printf("Error on unmarshalling: %s\n", err)
-		return nil, err
-	}
-
-	docTypeList := make([]string, len(mapping))
-	i := 0
-	for key := range mapping {
-		docTypeList[i] = key
-		i++
+	var docTypeList []string
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".json") {
+			docTypeList = append(docTypeList, strings.TrimSuffix(f.Name(), ".json"))
+		}
 	}
 
 	return docTypeList, nil

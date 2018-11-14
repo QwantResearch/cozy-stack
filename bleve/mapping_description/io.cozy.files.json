@@ -1,0 +1,7 @@
+{
+    "name": "textField",
+    "tags": "keywordField",
+    "created_at": "dateField",
+    "updated_at": "dateField",
+    "_rev": "storeField"
+}
