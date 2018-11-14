@@ -128,6 +128,7 @@ func InitializeIndexes(instName string) error {
 		for _, lang := range languages {
 			indexes[instName].indexList[docType][lang], err = GetIndex(instName, docType, lang)
 			if err != nil {
+				DeleteIndex(instName, docType, false)
 				fmt.Printf("Error on GetIndex:  %s\n", err)
 				return err
 			}
@@ -382,7 +383,7 @@ func ReplicateAll(instName string) error {
 
 	for docType := range indexes[instName].indexList {
 		for lang := range indexes[instName].indexList[docType] {
-			_, err := Replicate(instName, indexes[instName].indexList[docType][lang], prefixPath+instName+"/"+lang+"/"+docType)
+			_, err := Replicate(instName, docType, lang)
 			if err != nil {
 				fmt.Printf("Error on replication: %s\n", err)
 				return err
@@ -393,9 +394,14 @@ func ReplicateAll(instName string) error {
 	return nil
 }
 
-func Replicate(instName string, index *bleve.Index, path string) (string, error) {
+func Replicate(instName string, docType string, lang string) (string, error) {
 
 	err := checkInstance(instName)
+	if err != nil {
+		return "", err
+	}
+
+	err = checkInstanceDocType(instName, docType)
 	if err != nil {
 		return "", err
 	}
@@ -403,7 +409,9 @@ func Replicate(instName string, index *bleve.Index, path string) (string, error)
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
 
-	_, store, err := (*index).Advanced()
+	path := prefixPath + instName + "/" + lang + "/" + docType
+
+	_, store, err := (*indexes[instName].indexList[docType][lang]).Advanced()
 	if err != nil {
 		fmt.Println(err)
 		return "", err
@@ -441,7 +449,7 @@ func Replicate(instName string, index *bleve.Index, path string) (string, error)
 
 func SendIndexToQuery(instName string, docType string, lang string) error {
 
-	tmpFileName, err := Replicate(instName, indexes[instName].indexList[docType][lang], prefixPath+instName+"/"+lang+"/"+docType)
+	tmpFileName, err := Replicate(instName, docType, lang)
 	if err != nil {
 		fmt.Println("Error on replicate when sending index to query")
 		fmt.Println(err)
@@ -528,7 +536,9 @@ func DeleteIndex(instName string, docType string, querySide bool) error {
 	defer indexes[instName].indexMu.Unlock()
 
 	for lang := range indexes[instName].indexList[docType] {
-		(*indexes[instName].indexList[docType][lang]).Close()
+		if indexes[instName].indexList[docType][lang] != nil {
+			(*indexes[instName].indexList[docType][lang]).Close()
+		}
 		err := os.RemoveAll(prefixPath + instName + "/" + lang + "/" + docType)
 		if err != nil {
 			return err
