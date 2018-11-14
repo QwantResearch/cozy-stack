@@ -22,6 +22,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_search", SearchQuery)
 	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
+	router.POST("/_reindex_all", ReindexAll)
 	router.POST("/_all_indexes_update", AllIndexesUpdate)
 	router.POST("/_index_update", IndexUpdate)
 	router.POST("/_update_index_alias/:instance/:doctype/:lang", ReplicateIndex)
@@ -89,7 +90,7 @@ func SearchQueryPrefix(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{"results": results, "query": findRequest})
 }
 
-func Reindex(c echo.Context) error {
+func ReindexAll(c echo.Context) error {
 
 	// TODO : see how to deal with permissions
 	// if err := permissions.AllowWholeType(c, permissions.POST, consts.Files); err != nil {
@@ -114,7 +115,50 @@ func Reindex(c echo.Context) error {
 		})
 	}
 
-	err := indexation.ReIndex(instanceName)
+	err := indexation.ReIndexAll(instanceName)
+	if err != nil {
+		fmt.Printf("Error on opening index: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func Reindex(c echo.Context) error {
+
+	// TODO : see how to deal with permissions
+	// if err := permissions.AllowWholeType(c, permissions.POST, consts.Files); err != nil {
+	// 	fmt.Println(err)
+	// 	return err
+	// }
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var instanceName string
+	var docType string
+	var ok bool
+	if instanceName, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	if docType, ok = body["docType"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("docType string field required.").Error(),
+		})
+	}
+
+	err := indexation.ReIndex(instanceName, docType)
 	if err != nil {
 		fmt.Printf("Error on opening index: %s\n", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -262,7 +306,7 @@ func DeleteIndex(c echo.Context) error {
 		querySide = body["querySide"].(bool)
 	}
 
-	err := indexation.DeleteIndex(instance, docType, querySide)
+	err := indexation.DeleteIndexLock(instance, docType, querySide)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),

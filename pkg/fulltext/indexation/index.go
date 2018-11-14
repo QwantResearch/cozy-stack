@@ -107,7 +107,7 @@ func StartIndex(instanceList []*instance.Instance) error {
 
 	indexes = make(map[string]InstanceIndex)
 	for _, inst := range instances {
-		err = InitializeIndexes(inst.DomainName())
+		err = initializeIndexes(inst.DomainName())
 		if err != nil {
 			return err
 		}
@@ -116,29 +116,45 @@ func StartIndex(instanceList []*instance.Instance) error {
 	return AllIndexesUpdate()
 }
 
-func InitializeIndexes(instName string) error {
+func initializeIndexes(instName string) error {
 
 	var err error
 	indexes[instName] = InstanceIndex{
 		make(map[string]map[string]*bleve.Index, len(docTypeList)),
 		new(sync.Mutex),
 	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
 	for _, docType := range docTypeList {
-		indexes[instName].indexList[docType] = make(map[string]*bleve.Index, len(languages))
-		for _, lang := range languages {
-			indexes[instName].indexList[docType][lang], err = GetIndex(instName, docType, lang)
-			if err != nil {
-				DeleteIndex(instName, docType, false)
-				fmt.Printf("Error on GetIndex:  %s\n", err)
-				return err
-			}
+		err = initializeIndexDocType(instName, docType)
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string {
+func initializeIndexDocType(instName string, docType string) error {
+	// Call only inside a mutex lock
+	// indexes[instName] must be set
+
+	indexes[instName].indexList[docType] = make(map[string]*bleve.Index, len(languages))
+	for _, lang := range languages {
+		indexes[instName].indexList[docType][lang], err = getIndex(instName, docType, lang)
+		if err != nil {
+			// It failed, we remove the erroneous doctype
+			deleteIndex(instName, docType, false)
+			fmt.Printf("Error on getIndex:  %s\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func findWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string {
 	for lang := range indexList {
 		doc, _ := (*indexList[lang]).Document(id)
 		if doc != nil {
@@ -149,7 +165,8 @@ func FindWhichLangIndexDoc(indexList map[string]*bleve.Index, id string) string 
 	return ""
 }
 
-func GetIndex(instName string, docType string, lang string) (*bleve.Index, error) {
+func getIndex(instName string, docType string, lang string) (*bleve.Index, error) {
+	// call only inside a mutex
 
 	// Send fetched index if already exists
 	if indexes[instName].indexList[docType][lang] != nil {
@@ -177,7 +194,7 @@ func GetIndex(instName string, docType string, lang string) (*bleve.Index, error
 		}
 
 		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on IndexUpdate())
-		SetStoreSeq(&i, "0")
+		setStoreSeq(&i, "0")
 
 		return &i, nil
 
@@ -209,23 +226,16 @@ func IndexUpdate(instName string, docType string) error {
 		return err
 	}
 
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
 	err = checkInstanceDocType(instName, docType)
 	if err != nil {
 		return err
 	}
 
-	indexes[instName].indexMu.Lock()
-	defer indexes[instName].indexMu.Unlock()
-
-	if _, ok := indexes[instName]; !ok {
-		return errors.New("Instance not found in IndexUpdate")
-	}
-	if _, ok := indexes[instName].indexList[docType]; !ok {
-		return errors.New("DocType not found in IndexUpdate")
-	}
-
 	// Set request to get last changes
-	last_store_seq, err := GetStoreSeq(indexes[instName].indexList[docType][languages[0]])
+	last_store_seq, err := getStoreSeq(indexes[instName].indexList[docType][languages[0]])
 	if err != nil {
 		fmt.Printf("Error on GetStoredSeq: %s\n", err)
 		return err
@@ -259,7 +269,7 @@ func IndexUpdate(instName string, docType string) error {
 
 	for i, result := range response.Results {
 
-		originalIndexLang := FindWhichLangIndexDoc(indexes[instName].indexList[docType], result.DocID)
+		originalIndexLang := findWhichLangIndexDoc(indexes[instName].indexList[docType], result.DocID)
 
 		// Delete the files that are trashed = true or _deleted = true
 		if result.Doc.Get("_deleted") == true || result.Doc.Get("trashed") == true {
@@ -306,18 +316,18 @@ func IndexUpdate(instName string, docType string) error {
 		(*indexes[instName].indexList[docType][lang]).Batch(batch[lang])
 
 		// Store the new seq number in the indexes
-		SetStoreSeq(indexes[instName].indexList[docType][lang], response.LastSeq)
+		setStoreSeq(indexes[instName].indexList[docType][lang], response.LastSeq)
 	}
 
 	return nil
 }
 
-func ReIndex(instName string) error {
+func ReIndex(instName string, docType string) error {
 
 	err := checkInstance(instName)
 	if err != nil {
-		// Not existing already, try to initialize it
-		err = InitializeIndexes(instName)
+		// Not existing already, try to initialize it (for mutex)
+		err = initializeIndexes(instName)
 		if err != nil {
 			return err
 		}
@@ -332,46 +342,50 @@ func ReIndex(instName string) error {
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
 
-	// Close indexes
-	for docType := range indexes[instName].indexList {
-		for lang := range indexes[instName].indexList[docType] {
-			if indexes[instName].indexList[docType][lang] != nil {
-				err = (*indexes[instName].indexList[docType][lang]).Close()
-				if err != nil {
-					return err
-				}
-			}
-		}
+	err = checkInstanceDocType(instName, docType)
+	if err == nil {
+		// Already exists, need to remove
+		deleteIndex(instName, docType, false)
 	}
 
-	// Remove indexes
-	err = os.RemoveAll(prefixPath + instName)
+	// Re-initialize indexes var with docType
+	err = initializeIndexDocType(instName, docType)
+	if err != nil {
+		return err
+	}
+	// Add it to docTypeList if not already
+	addNewDoctypeToDocTypeList(docType)
+
+	// Update index
+	err = AddUpdateIndexJob(instName, docType)
 	if err != nil {
 		return err
 	}
 
-	// Fetch docTypeList from the mapping file, in case it changed
-	docTypeList, err = GetDocTypeListFromDescriptionFile()
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	// Re-initialize indexes var with new docTypeList
-	err = InitializeIndexes(instName)
-	if err != nil {
-		return err
-	}
+func ReIndexAll(instName string) error {
 
-	// Update all indexes
-	for docType, _ := range indexes[instName].indexList {
-		AddUpdateIndexJob(instName, docType)
+	for _, docType := range docTypeList {
+		err := ReIndex(instName, docType)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
 
+func addNewDoctypeToDocTypeList(newDocType string) {
+	for _, docType := range docTypeList {
+		if docType == newDocType {
+			return
+		}
+	}
+
+	// newDocType not found
+	docTypeList = append(docTypeList, newDocType)
 }
 
 func ReplicateAll(instName string) error {
@@ -401,13 +415,13 @@ func Replicate(instName string, docType string, lang string) (string, error) {
 		return "", err
 	}
 
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
 	err = checkInstanceDocType(instName, docType)
 	if err != nil {
 		return "", err
 	}
-
-	indexes[instName].indexMu.Lock()
-	defer indexes[instName].indexMu.Unlock()
 
 	path := prefixPath + instName + "/" + lang + "/" + docType
 
@@ -447,7 +461,7 @@ func Replicate(instName string, docType string, lang string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-func SendIndexToQuery(instName string, docType string, lang string) error {
+func sendIndexToQuery(instName string, docType string, lang string) error {
 
 	tmpFileName, err := Replicate(instName, docType, lang)
 	if err != nil {
@@ -490,11 +504,13 @@ func SendIndexToQuery(instName string, docType string, lang string) error {
 	return nil
 }
 
-func SetStoreSeq(index *bleve.Index, rev string) {
+func setStoreSeq(index *bleve.Index, rev string) {
+	// Call only inside a mutex lock
 	(*index).SetInternal([]byte("seq"), []byte(rev))
 }
 
-func GetStoreSeq(index *bleve.Index) (string, error) {
+func getStoreSeq(index *bleve.Index) (string, error) {
+	// Call only inside a mutex lock
 	res, err := (*index).GetInternal([]byte("seq"))
 	return string(res), err
 }
@@ -506,34 +522,39 @@ func DeleteAllIndexesInstance(instName string, querySide bool) error {
 		return err
 	}
 
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
 	for docType := range indexes[instName].indexList {
-		err := DeleteIndex(instName, docType, querySide)
+		err := deleteIndex(instName, docType, querySide)
 		if err != nil {
 			return err
 		}
 	}
 
-	indexes[instName].indexMu.Lock()
-	defer indexes[instName].indexMu.Unlock()
-
 	delete(indexes, instName)
 	return os.RemoveAll(prefixPath + instName)
 }
 
-func DeleteIndex(instName string, docType string, querySide bool) error {
-
+func DeleteIndexLock(instName string, docType string, querySide bool) error {
 	err := checkInstance(instName)
 	if err != nil {
 		return err
 	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
 
 	err = checkInstanceDocType(instName, docType)
 	if err != nil {
 		return err
 	}
 
-	indexes[instName].indexMu.Lock()
-	defer indexes[instName].indexMu.Unlock()
+	return deleteIndex(instName, docType, querySide)
+}
+
+func deleteIndex(instName string, docType string, querySide bool) error {
+	// Call only inside a mutex lock
 
 	for lang := range indexes[instName].indexList[docType] {
 		if indexes[instName].indexList[docType][lang] != nil {
@@ -544,7 +565,7 @@ func DeleteIndex(instName string, docType string, querySide bool) error {
 			return err
 		}
 		if querySide {
-			err = NotifyDeleteIndexQuery(instName, docType, lang)
+			err = notifyDeleteIndexQuery(instName, docType, lang)
 			if err != nil {
 				fmt.Printf("Error telling query to delete index: %s\n", err)
 				return err
@@ -557,7 +578,7 @@ func DeleteIndex(instName string, docType string, querySide bool) error {
 	return nil
 }
 
-func NotifyDeleteIndexQuery(instName string, docType string, lang string) error {
+func notifyDeleteIndexQuery(instName string, docType string, lang string) error {
 
 	inst, err := instance.Get(instName)
 	if err != nil {
@@ -608,7 +629,7 @@ func StartWorker() {
 			IndexUpdate(notif.InstanceName, notif.DocType) // TODO: deal with errors
 			// Send the new index to the search side
 			for lang := range indexes[notif.InstanceName].indexList[notif.DocType] {
-				SendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
+				sendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
 			}
 		}
 	}(updateQueue)
