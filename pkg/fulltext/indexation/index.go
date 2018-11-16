@@ -193,8 +193,8 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 
 		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on UpdateIndex())
 		err = setStoreSeq(&i, "0")
-		fmt.Printf("Error on SetStoreSeq: %s\n", err)
 		if err != nil {
+			fmt.Printf("Error on SetStoreSeq: %s\n", err)
 			return nil, err
 		}
 
@@ -319,8 +319,8 @@ func UpdateIndex(instName string, docType string) error {
 
 		// Store the new seq number in the indexes
 		err = setStoreSeq(indexes[instName].indexList[docType][lang], response.LastSeq)
-		fmt.Printf("Error on SetStoreSeq: %s\n", err)
 		if err != nil {
+			fmt.Printf("Error on SetStoreSeq: %s\n", err)
 			return err
 		}
 	}
