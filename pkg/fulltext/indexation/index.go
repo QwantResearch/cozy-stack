@@ -12,6 +12,7 @@ import (
 
 	"github.com/blevesearch/bleve"
 	"github.com/cozy/cozy-stack/client/request"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
@@ -289,9 +290,45 @@ func UpdateIndex(instName string, docType string) error {
 			continue
 		}
 
+		if typ, ok := result.Doc.M["type"]; !ok || typ.(string) == "directory" {
+			// This is a directory, we ignore this doc
+			continue
+		}
+
 		if originalIndexLang != "" {
 			// We found the document so we should update it the original index
 			result.Doc.M["docType"] = docType
+
+			// If doc is a file, we need to check if content has been modified since last indexation
+			if docType == consts.Files {
+				md5sum, err := getStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
+				if err != nil {
+					fmt.Printf("Error on getStoreMd5sum: %s\n", err)
+					return err
+				}
+				if md5sum != result.Doc.M["md5sum"] {
+					// Get new content and index it
+					content, err := getContentFile(instName, result.DocID)
+					if err != nil {
+						fmt.Printf("Error on getContentFile", err)
+						return err
+					}
+					result.Doc.M["content"] = content
+					err = setStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID, result.Doc.M["md5sum"].(string))
+					if err != nil {
+						fmt.Printf("Error on setStoreMd5sum: %s\n", err)
+						return err
+					}
+				} else {
+					// retrieve content stored in the index
+					content, err := getExistingContent(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
+					if err != nil {
+						fmt.Printf("Error on getExistingContent", err)
+						return err
+					}
+					result.Doc.M["content"] = content
+				}
+			}
 			batch[originalIndexLang].Index(result.DocID, result.Doc.M)
 		} else {
 			// We couldn't find the document, so we predict the language to index it in the right index
@@ -301,6 +338,22 @@ func UpdateIndex(instName string, docType string) error {
 				continue
 			}
 			result.Doc.M["docType"] = docType
+
+			// If doc is a file, we need to index content
+			if docType == consts.Files {
+				content, err := getContentFile(instName, result.DocID)
+				if err != nil {
+					fmt.Printf("Error on getContentFile", err)
+					return err
+				}
+				result.Doc.M["content"] = content
+				err = setStoreMd5sum(indexes[instName].indexList[docType][pred], result.DocID, result.Doc.M["md5sum"].(string))
+				if err != nil {
+					fmt.Printf("Error on setStoreMd5sum: %s\n", err)
+					return err
+				}
+			}
+
 			batch[pred].Index(result.DocID, result.Doc.M)
 		}
 
@@ -519,6 +572,36 @@ func getStoreSeq(index *bleve.Index) (string, error) {
 	// Call only inside a mutex lock
 	res, err := (*index).GetInternal([]byte("seq"))
 	return string(res), err
+}
+
+func setStoreMd5sum(index *bleve.Index, fileId string, md5sum string) error {
+	// Call only inside a mutex lock
+	return (*index).SetInternal([]byte("md5sum"+fileId), []byte(md5sum))
+}
+
+func getStoreMd5sum(index *bleve.Index, fileId string) (string, error) {
+	// Call only inside a mutex lock
+	res, err := (*index).GetInternal([]byte("md5sum" + fileId))
+	return string(res), err
+}
+
+func getExistingContent(index *bleve.Index, id string) (string, error) {
+	// Call only inside a mutex lock
+	doc, err := (*index).Document(id)
+	if err != nil {
+		return "", err
+	}
+	for _, docIndex := range doc.Fields {
+		if docIndex.Name() == "content" {
+			return string(docIndex.Value()[:docIndex.NumPlainTextBytes()]), nil
+		}
+	}
+	return "", errors.New("No existing content found in the index.")
+}
+
+func getContentFile(uuid string, id string) (string, error) {
+	// This is a mock function
+	return "", nil
 }
 
 func DeleteAllIndexesInstance(instName string, querySide bool) error {
