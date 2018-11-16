@@ -129,6 +129,9 @@ func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping,
 		storeFieldMapping.Index = false
 		storeFieldMapping.Store = true
 		return storeFieldMapping, nil
+	case "timestampField":
+		timestampFieldMapping := bleve.NewDateTimeFieldMapping()
+		return timestampFieldMapping, nil
 	}
 
 	// nothing matched, we return an error
