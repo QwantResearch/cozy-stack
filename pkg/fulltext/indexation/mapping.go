@@ -41,12 +41,12 @@ func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang
 	AddFieldMappingsFromDescription(documentMapping, mappingDescription, lang)
 
 	// Add docType field mapping, as keyword, common to all doctypes
-	keywordFieldMapping, err := CreateFieldMapping("keywordField", lang)
+	storeFieldMapping, err := CreateFieldMapping("storeField", lang)
 	if err != nil {
-		fmt.Printf("Error when creating keywordFielMapping for docType: %s\n", err)
+		fmt.Printf("Error when creating storeFieldMapping for docType: %s\n", err)
 		return err
 	}
-	documentMapping.AddFieldMappingsAt("docType", keywordFieldMapping)
+	documentMapping.AddFieldMappingsAt("docType", storeFieldMapping)
 
 	indexMapping.AddDocumentMapping(docType, documentMapping)
 	indexMapping.TypeField = "docType"
