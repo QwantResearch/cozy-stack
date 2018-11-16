@@ -23,8 +23,8 @@ func Routes(router *echo.Group) {
 	router.POST("/_search_prefix", SearchQueryPrefix)
 	router.POST("/_reindex", Reindex)
 	router.POST("/_reindex_all", ReindexAll)
-	router.POST("/_all_indexes_update", AllIndexesUpdate)
-	router.POST("/_index_update", IndexUpdate)
+	router.POST("/_update_all_indexes", UpdateAllIndexes)
+	router.POST("/_update_index", UpdateIndex)
 	router.POST("/_update_index_alias/:instance/:doctype/:lang", ReplicateIndex)
 	router.POST("/_delete_index", DeleteIndex)
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
@@ -169,9 +169,9 @@ func Reindex(c echo.Context) error {
 	return c.JSON(http.StatusOK, nil)
 }
 
-func AllIndexesUpdate(c echo.Context) error {
+func UpdateAllIndexes(c echo.Context) error {
 
-	err := indexation.AllIndexesUpdate()
+	err := indexation.UpdateAllIndexes()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
@@ -182,7 +182,7 @@ func AllIndexesUpdate(c echo.Context) error {
 
 }
 
-func IndexUpdate(c echo.Context) error {
+func UpdateIndex(c echo.Context) error {
 
 	var body map[string]interface{}
 

@@ -110,7 +110,7 @@ func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []strin
 		}
 	}
 
-	return AllIndexesUpdate()
+	return UpdateAllIndexes()
 }
 
 func initializeIndexes(instName string) error {
@@ -191,7 +191,7 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 			return nil, err2
 		}
 
-		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on IndexUpdate())
+		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on UpdateIndex())
 		err = setStoreSeq(&i, "0")
 		fmt.Printf("Error on SetStoreSeq: %s\n", err)
 		if err != nil {
@@ -209,7 +209,7 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 	return &i, nil
 }
 
-func AllIndexesUpdate() error {
+func UpdateAllIndexes() error {
 	for instName := range indexes {
 		for docType := range indexes[instName].indexList {
 			err := AddUpdateIndexJob(instName, docType)
@@ -221,7 +221,7 @@ func AllIndexesUpdate() error {
 	return nil
 }
 
-func IndexUpdate(instName string, docType string) error {
+func UpdateIndex(instName string, docType string) error {
 
 	err := checkInstance(instName)
 	if err != nil {
@@ -632,7 +632,7 @@ func StartWorker() {
 
 	go func(updateQueue <-chan updateIndexNotif) {
 		for notif := range updateQueue {
-			IndexUpdate(notif.InstanceName, notif.DocType) // TODO: deal with errors
+			UpdateIndex(notif.InstanceName, notif.DocType) // TODO: deal with errors
 			// Send the new index to the search side
 			for lang := range indexes[notif.InstanceName].indexList[notif.DocType] {
 				sendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
