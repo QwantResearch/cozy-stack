@@ -192,7 +192,11 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 		}
 
 		// Set the couchdb seq to 0 (default) when creating an index (to fetch all changes on IndexUpdate())
-		setStoreSeq(&i, "0")
+		err = setStoreSeq(&i, "0")
+		fmt.Printf("Error on SetStoreSeq: %s\n", err)
+		if err != nil {
+			return nil, err
+		}
 
 		return &i, nil
 
@@ -314,7 +318,11 @@ func IndexUpdate(instName string, docType string) error {
 		(*indexes[instName].indexList[docType][lang]).Batch(batch[lang])
 
 		// Store the new seq number in the indexes
-		setStoreSeq(indexes[instName].indexList[docType][lang], response.LastSeq)
+		err = setStoreSeq(indexes[instName].indexList[docType][lang], response.LastSeq)
+		fmt.Printf("Error on SetStoreSeq: %s\n", err)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -502,9 +510,9 @@ func sendIndexToQuery(instName string, docType string, lang string) error {
 	return nil
 }
 
-func setStoreSeq(index *bleve.Index, rev string) {
+func setStoreSeq(index *bleve.Index, rev string) error {
 	// Call only inside a mutex lock
-	(*index).SetInternal([]byte("seq"), []byte(rev))
+	return (*index).SetInternal([]byte("seq"), []byte(rev))
 }
 
 func getStoreSeq(index *bleve.Index) (string, error) {
