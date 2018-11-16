@@ -419,6 +419,7 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 		Name:        true,
 		Rev:         true,
 		Offset:      0,
+		Sort:        nil,
 		DocTypes:    []string{consts.Files}, // TODO : add all default doctypes
 	}
 
@@ -440,6 +441,13 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 
 	if offset, ok := mapJSONRequest["offset"]; ok {
 		request.Offset = int(offset.(float64))
+	}
+
+	if sort, ok := mapJSONRequest["sort"].([]interface{}); ok {
+		request.Sort = make([]string, len(sort))
+		for i, s := range sort {
+			request.Sort[i] = s.(string)
+		}
 	}
 
 	if docTypes, ok := mapJSONRequest["docTypes"].([]interface{}); ok {
