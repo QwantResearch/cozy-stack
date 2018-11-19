@@ -15,7 +15,7 @@ type QueryRequest struct {
 	Name         bool     `json:"name"`
 	Rev          bool     `json:"_rev"`
 	Offset       int      `json:"offset"`
-	Sort         []string `json:"sort"`
+	Order        []string `json:"order"`
 	DocTypes     []string `json:"docTypes"`
 	InstanceName string   `json:"instance"`
 }
@@ -155,8 +155,8 @@ func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
 	searchRequest.Size = request.NumbResults
 	searchRequest.From = request.Offset
 
-	if request.Sort != nil {
-		searchRequest.SortBy(request.Sort)
+	if request.Order != nil {
+		searchRequest.SortBy(request.Order)
 	}
 
 	// Addings Facets
