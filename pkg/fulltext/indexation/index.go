@@ -58,6 +58,10 @@ var ft_language *FastText
 
 var updateQueue chan updateIndexNotif
 
+var indexUpdateRetryTime = time.Minute * 10
+
+var updateQueueSize = 100
+
 func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []string) error {
 
 	instances = instanceList
@@ -675,14 +679,30 @@ func checkInstanceDocType(instName string, docType string) error {
 
 func StartWorker() {
 
-	updateQueue = make(chan updateIndexNotif, 10)
+	updateQueue = make(chan updateIndexNotif, updateQueueSize)
 
 	go func(updateQueue <-chan updateIndexNotif) {
 		for notif := range updateQueue {
-			UpdateIndex(notif.InstanceName, notif.DocType) // TODO: deal with errors
-			// Send the new index to the search side
-			for lang := range indexes[notif.InstanceName].indexList[notif.DocType] {
-				sendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
+			err := UpdateIndex(notif.InstanceName, notif.DocType)
+			if err != nil {
+				fmt.Printf("Error on UpdateIndex: %s\n", err)
+				// We retry the indexation after an indexUpdateRetryTime
+				go func(instance string, docType string) {
+					timer := time.NewTimer(indexUpdateRetryTime)
+					<-timer.C
+					err := AddUpdateIndexJob(instance, docType)
+					if err != nil {
+						fmt.Printf("Error on AddUpdateIndexJob: %s\n", err)
+					}
+				}(notif.InstanceName, notif.DocType)
+			} else {
+				// Send the new index to the search side
+				for lang := range indexes[notif.InstanceName].indexList[notif.DocType] {
+					err := sendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
+					if err != nil {
+						fmt.Printf("Error on sendIndexToQuery: %s\n", err)
+					}
+				}
 			}
 		}
 	}(updateQueue)
