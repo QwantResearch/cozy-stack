@@ -196,7 +196,7 @@ func UpdateIndex(c echo.Context) error {
 	}
 
 	var doctypeUpdate string
-	var userID string
+	var instance string
 	var ok bool
 	if doctypeUpdate, ok = body["docType"].(string); !ok {
 		return c.JSON(http.StatusBadRequest, echo.Map{
@@ -204,13 +204,13 @@ func UpdateIndex(c echo.Context) error {
 		})
 	}
 
-	if userID, ok = body["userID"].(string); !ok {
+	if instance, ok = body["instance"].(string); !ok {
 		return c.JSON(http.StatusBadRequest, echo.Map{
-			"error": errors.New("userID string field required.").Error(),
+			"error": errors.New("instance string field required.").Error(),
 		})
 	}
 
-	err := indexation.AddUpdateIndexJob(userID, doctypeUpdate)
+	err := indexation.AddUpdateIndexJob(instance, doctypeUpdate)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
