@@ -79,6 +79,8 @@ func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []strin
 		}
 	}
 
+	StartWorker()
+
 	return UpdateAllIndexes()
 }
 

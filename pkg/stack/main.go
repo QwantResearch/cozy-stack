@@ -142,8 +142,6 @@ security features. Please do not use this binary as your production server.
 
 	// Start a bleve index
 	// TODO : clean the start-up (especially the instance part)
-	indexation.StartWorker()
-
 	list, _ := instance.List()
 
 	indexation.StartIndex(list, []string{consts.PhotosAlbums})
