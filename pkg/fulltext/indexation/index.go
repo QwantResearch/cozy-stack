@@ -17,38 +17,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
-type file struct {
-	ID         string        `json:"_id"`
-	Rev        string        `json:"_rev"`
-	Type       string        `json:"type"`
-	Name       string        `json:"name"`
-	DirID      string        `json:"dir_id"`
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
-	Size       string        `json:"size"`
-	Md5Sum     string        `json:"md5sum"`
-	Mime       string        `json:"mime"`
-	Class      string        `json:"class"`
-	Executable bool          `json:"executable"`
-	Trashed    bool          `json:"trashed"` //TODO: pay attention to trash or not
-	Tags       []interface{} `json:"tags"`
-	DocType    string        `json:"docType"`
-	Metadata   struct {
-		Datetime         time.Time `json:"datetime"`
-		ExtractorVersion int       `json:"extractor_version"`
-		Height           int       `json:"height"`
-		Width            int       `json:"width"`
-	} `json:"metadata"`
-}
-
-type photoAlbum struct {
-	ID        string    `json:"_id"`
-	Rev       string    `json:"_rev"`
-	CreatedAt time.Time `json:"created_at"`
-	Name      string    `json:"name"`
-	DocType   string    `json:"docType"`
-}
-
 type updateIndexNotif struct {
 	InstanceName string
 	DocType      string
