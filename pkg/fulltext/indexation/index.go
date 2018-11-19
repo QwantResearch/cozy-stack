@@ -360,12 +360,6 @@ func ReIndex(instName string, docType string) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		// Save indexes before reindexing
-		err = ReplicateAll(instName)
-		if err != nil {
-			return err
-		}
 	}
 
 	indexes[instName].indexMu.Lock()
