@@ -9,8 +9,11 @@ import (
 	"text/tabwriter"
 
 	"github.com/cozy/cozy-stack/client"
+	"github.com/cozy/cozy-stack/pkg/apps"
 	"github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/instance"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +58,7 @@ var installWebappCmd = &cobra.Command{
 	Short: `Install an application with the specified slug name
 from the given source URL.`,
 	Example: "$ cozy-stack apps install --domain cozy.tools:8080 drive registry://drive/stable",
-	Long:    "[Some schemes](../../docs/apps.md#sources) are allowed as `[sourceurl]`.",
+	Long:    "[Some schemes](https://docs.cozy.io/en/cozy-stack/apps/#sources) are allowed as `[sourceurl]`.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return installApp(cmd, args, consts.Apps)
 	},
@@ -129,7 +132,25 @@ var installKonnectorCmd = &cobra.Command{
 	Use: "install <slug> [sourceurl]",
 	Short: `Install a konnector with the specified slug name
 from the given source URL.`,
-	Example: "$ cozy-stack konnectors install --domain cozy.tools:8080 trainline registry://trainline/stable",
+	Long: `
+Install a konnector with the specified slug name. You can also provide the
+version number to install a specific release if you use the registry:// scheme.
+Following formats are accepted:
+	registry://<konnector>/<channel>/<version>
+	registry://<konnector>/<channel>
+	registry://<konnector>/<version>
+	registry://<konnector>
+
+If you provide a channel and a version, the channel is ignored.
+Default channel is stable.
+Default version is latest.
+`,
+	Example: `
+$ cozy-stack konnectors install --domain cozy.tools:8080 trainline registry://trainline/stable/1.0.1
+$ cozy-stack konnectors install --domain cozy.tools:8080 trainline registry://trainline/stable
+$ cozy-stack konnectors install --domain cozy.tools:8080 trainline registry://trainline/1.2.0
+$ cozy-stack konnectors install --domain cozy.tools:8080 trainline registry://trainline
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return installApp(cmd, args, consts.Konnectors)
 	},
@@ -541,6 +562,38 @@ func lsApps(cmd *cobra.Command, args []string, appType string) error {
 	return w.Flush()
 }
 
+var appsVersionsCmd = &cobra.Command{
+	Use:     "versions",
+	Short:   `Show apps versions of all instances`,
+	Example: "$ cozy-stack apps versions",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		instances, err := instance.List()
+		if err != nil {
+			return nil
+		}
+		counter := make(map[string]map[string]int)
+
+		for _, instance := range instances {
+			var apps []*apps.WebappManifest
+			req := &couchdb.AllDocsRequest{Limit: 100}
+			couchdb.GetAllDocs(instance, consts.Apps, req, &apps)
+
+			for _, app := range apps {
+				if _, ok := counter[app.Slug()]; !ok {
+					counter[app.Slug()] = map[string]int{app.Version(): 0}
+				}
+				counter[app.Slug()][app.Version()]++
+			}
+		}
+		json, err := json.MarshalIndent(counter, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(json))
+		return nil
+	},
+}
+
 func foreachDomains(predicate func(*client.Instance) error) error {
 	c := newAdminClient()
 	// TODO(pagination): Make this iteration more robust
@@ -584,6 +637,7 @@ func init() {
 	webappsCmdGroup.AddCommand(installWebappCmd)
 	webappsCmdGroup.AddCommand(updateWebappCmd)
 	webappsCmdGroup.AddCommand(uninstallWebappCmd)
+	webappsCmdGroup.AddCommand(appsVersionsCmd)
 
 	konnectorsCmdGroup.PersistentFlags().StringVar(&flagAppsDomain, "domain", domain, "specify the domain name of the instance")
 	konnectorsCmdGroup.PersistentFlags().StringVar(&flagKonnectorsParameters, "parameters", "", "override the parameters of the installed konnector")

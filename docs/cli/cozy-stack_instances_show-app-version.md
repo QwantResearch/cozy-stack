@@ -1,28 +1,25 @@
-## cozy-stack instances show-prefix
+## cozy-stack instances show-app-version
 
-Show the instance prefix of the specified domain
+Show instances that have a particular app version
 
 ### Synopsis
 
-
-cozy-stack instances show allows to show the instance prefix on the cozy for a
-given domain. The prefix is used for databases and VFS prefixing.
-
+Show instances that have a particular app version
 
 ```
-cozy-stack instances show-prefix <domain> [flags]
+cozy-stack instances show-app-version [app-slug] [version] [flags]
 ```
 
 ### Examples
 
 ```
-$ cozy-stack instances show-prefix cozy.tools:8080
+$ cozy-stack instances show-app-version drive 1.0.1
 ```
 
 ### Options
 
 ```
-  -h, --help   help for show-prefix
+  -h, --help   help for show-app-version
 ```
 
 ### Options inherited from parent commands

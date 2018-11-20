@@ -1,25 +1,28 @@
-## cozy-stack instances ls
+## cozy-stack instances show-db-prefix
 
-List instances
+Show the instance DB prefix of the specified domain
 
 ### Synopsis
 
 
-cozy-stack instances ls allows to list all the instances that can be served
-by this server.
+cozy-stack instances show allows to show the instance prefix on the cozy for a
+given domain. The prefix is used for databases and VFS prefixing.
 
 
 ```
-cozy-stack instances ls [flags]
+cozy-stack instances show-db-prefix <domain> [flags]
+```
+
+### Examples
+
+```
+$ cozy-stack instances show-db-prefix cozy.tools:8080
 ```
 
 ### Options
 
 ```
-      --available-fields   List available fields for --fields option
-      --fields strings     Arguments shown for each line in the list
-  -h, --help               help for ls
-      --json               Show each line as a json representation of the instance
+  -h, --help   help for show-db-prefix
 ```
 
 ### Options inherited from parent commands

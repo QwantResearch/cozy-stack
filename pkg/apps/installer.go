@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/Masterminds/semver"
 	"github.com/cozy/cozy-stack/pkg/hooks"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
@@ -424,16 +425,22 @@ func (i *Installer) Poll() (Manifest, bool, error) {
 	return man, done, man.Error()
 }
 
-func doLazyUpdate(db prefixer.Prefixer, man Manifest, availableVersion string, copier Copier, registries []*url.URL) Manifest {
+// DoLazyUpdate tries to update an application before using it
+func DoLazyUpdate(db prefixer.Prefixer, man Manifest, availableVersion string, copier Copier, registries []*url.URL) Manifest {
 	src, err := url.Parse(man.Source())
 	if err != nil || src.Scheme != "registry" {
 		return man
 	}
-	v, errv := registry.GetLatestVersion(man.Slug(), getRegistryChannel(src), registries)
+	var v *registry.Version
+	channel, _ := getRegistryChannel(src)
+	v, errv := registry.GetLatestVersion(man.Slug(), channel, registries)
 	if errv != nil || v.Version == man.Version() {
 		return man
 	}
 	if availableVersion != "" && v.Version == availableVersion {
+		return man
+	}
+	if channel == "stable" && !isMoreRecent(man.Version(), v.Version) {
 		return man
 	}
 	inst, err := NewInstaller(db, copier, &InstallerOptions{
@@ -450,6 +457,19 @@ func doLazyUpdate(db prefixer.Prefixer, man Manifest, availableVersion string, c
 		return man
 	}
 	return newman
+}
+
+// isMoreRecent returns true if b is greater than a
+func isMoreRecent(a, b string) bool {
+	vA, err := semver.NewVersion(a)
+	if err != nil {
+		return true
+	}
+	vB, err := semver.NewVersion(b)
+	if err != nil {
+		return false
+	}
+	return vB.GreaterThan(vA)
 }
 
 func isPlatformApp(man Manifest) bool {

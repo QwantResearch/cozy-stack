@@ -33,7 +33,7 @@ func Serve(c echo.Context) error {
 	i := middlewares.GetInstance(c)
 	slug := c.Get("slug").(string)
 
-	if (!i.OnboardingFinished && slug != consts.OnboardingSlug && slug != consts.CollectSlug) ||
+	if (!i.OnboardingFinished && slug != consts.OnboardingSlug) ||
 		(i.OnboardingFinished && slug == consts.OnboardingSlug) {
 		return c.Redirect(http.StatusFound, i.PageURL("/", nil))
 	}
@@ -57,14 +57,19 @@ func Serve(c echo.Context) error {
 		return c.Redirect(http.StatusFound, redirect)
 	}
 
-	app, err := apps.GetWebappBySlugAndUpdate(i, slug,
-		i.AppsCopier(apps.Webapp), i.Registries())
+	app, err := apps.GetWebappBySlug(i, slug)
 	if err != nil {
 		// Used for the "collect" => "home" renaming
-		if err == apps.ErrNotFound && slug == consts.CollectSlug {
+		if err == apps.ErrNotFound && slug == "collect" {
 			return c.Redirect(http.StatusMovedPermanently, i.DefaultRedirection().String())
 		}
 		return err
+	}
+
+	route, file := app.FindRoute(path.Clean(c.Request().URL.Path))
+	if file == "" || file == route.Index {
+		app = apps.DoLazyUpdate(i, app, app.AvailableVersion,
+			i.AppsCopier(apps.Webapp), i.Registries()).(*apps.WebappManifest)
 	}
 
 	switch app.State() {

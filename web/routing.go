@@ -11,6 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/metrics"
 	"github.com/cozy/cozy-stack/web/apps"
 	"github.com/cozy/cozy-stack/web/auth"
+	"github.com/cozy/cozy-stack/web/compat"
 	"github.com/cozy/cozy-stack/web/data"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/files"
@@ -32,19 +33,18 @@ import (
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/cozy/cozy-stack/web/status"
 	"github.com/cozy/cozy-stack/web/version"
-	"github.com/cozy/echo/middleware"
-
 	"github.com/cozy/echo"
+	"github.com/cozy/echo/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
 	// cspScriptSrcWhitelist is a whitelist for default allowed domains in CSP.
-	cspScriptSrcWhitelist = "https://piwik.cozycloud.cc"
+	cspScriptSrcWhitelist = "https://piwik.cozycloud.cc https://matomo.cozycloud.cc"
 
 	// cspImgSrcWhitelist is a whitelist of images domains that are allowed in
 	// CSP.
-	cspImgSrcWhitelist = "https://piwik.cozycloud.cc " +
+	cspImgSrcWhitelist = "https://piwik.cozycloud.cc https://matomo.cozycloud.cc " +
 		"https://*.tile.openstreetmap.org https://*.tile.osm.org " +
 		"https://*.tiles.mapbox.com https://api.mapbox.com"
 )
@@ -56,6 +56,7 @@ var hstsMaxAge = 365 * 24 * time.Hour // 1 year
 func SetupAppsHandler(appsHandler echo.HandlerFunc) echo.HandlerFunc {
 	mws := []echo.MiddlewareFunc{
 		middlewares.LoadAppSession,
+		middlewares.CheckIE,
 	}
 	if !config.GetConfig().CSPDisabled {
 		secure := middlewares.Secure(&middlewares.SecureConfig{
@@ -131,6 +132,7 @@ func SetupRoutes(router *echo.Echo) error {
 			middlewares.Accept(middlewares.AcceptOptions{
 				DefaultContentTypeOffer: echo.MIMETextHTML,
 			}),
+			middlewares.CheckIE,
 		}
 		router.GET("/", auth.Home, mws...)
 		auth.Routes(router.Group("/auth", mws...))
@@ -163,6 +165,7 @@ func SetupRoutes(router *echo.Echo) error {
 		apps.WebappsRoutes(router.Group("/apps", mwsNotBlocked...))
 		apps.KonnectorRoutes(router.Group("/konnectors", mwsNotBlocked...))
 		settings.Routes(router.Group("/settings", mwsNotBlocked...))
+		compat.Routes(router.Group("/compat", mwsNotBlocked...))
 
 		// Careful, the normal middlewares NeedInstance and LoadSession are not
 		// applied to this group in web/routing since they should not be used for

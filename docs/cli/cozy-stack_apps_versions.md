@@ -1,27 +1,25 @@
-## cozy-stack apps install
+## cozy-stack apps versions
 
-Install an application with the specified slug name
-from the given source URL.
+Show apps versions of all instances
 
 ### Synopsis
 
-[Some schemes](https://docs.cozy.io/en/cozy-stack/apps/#sources) are allowed as `[sourceurl]`.
+Show apps versions of all instances
 
 ```
-cozy-stack apps install <slug> [sourceurl] [flags]
+cozy-stack apps versions [flags]
 ```
 
 ### Examples
 
 ```
-$ cozy-stack apps install --domain cozy.tools:8080 drive registry://drive/stable
+$ cozy-stack apps versions
 ```
 
 ### Options
 
 ```
-      --ask-permissions   specify that the application should not be activated after installation
-  -h, --help              help for install
+  -h, --help   help for versions
 ```
 
 ### Options inherited from parent commands

@@ -564,6 +564,9 @@ func (s *Sharing) resolveConflictSamePath(inst *instance.Instance, visitorID, pt
 //getDirDocFromInstance fetches informations about a directory from the given
 //member of the sharing.
 func (s *Sharing) getDirDocFromInstance(inst *instance.Instance, m *Member, creds *Credentials, dirID string) (*vfs.DirDoc, error) {
+	if creds == nil || creds.AccessToken == nil {
+		return nil, ErrInvalidSharing
+	}
 	u, err := url.Parse(m.Instance)
 	if err != nil {
 		return nil, ErrInvalidSharing
