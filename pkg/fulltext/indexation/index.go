@@ -197,6 +197,9 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 func UpdateAllIndexes() error {
 	for instName := range indexes {
 		for docType := range indexes[instName].indexList {
+			if docType == ContentType {
+				continue
+			}
 			err := AddUpdateIndexJob(instName, docType)
 			if err != nil {
 				fmt.Printf("Could not add update index job: %s\n", err)
@@ -384,7 +387,6 @@ func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, r
 		}
 
 		pred, err = ft_language.GetLanguage(content)
-		fmt.Println("Predicted on content: " + pred)
 		if err != nil {
 			fmt.Printf("Error on language prediction:  %s\n", err)
 			return err
@@ -403,7 +405,6 @@ func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, r
 		}
 	} else {
 		pred, err = ft_language.GetLanguage(result.Doc.M["name"].(string))
-		fmt.Println("Predicted on name: " + pred)
 		if err != nil {
 			fmt.Printf("Error on language prediction:  %s\n", err)
 			return err
