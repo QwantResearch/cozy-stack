@@ -51,6 +51,8 @@ func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang
 	indexMapping.AddDocumentMapping(docType, documentMapping)
 	indexMapping.TypeField = "docType"
 
+	indexMapping.DefaultAnalyzer = lang
+
 	return nil
 }
 

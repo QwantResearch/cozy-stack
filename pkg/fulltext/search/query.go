@@ -136,22 +136,23 @@ func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
 		query := bleve.NewMatchPhrasePrefixQuery(request.QueryString)
 		searchRequest = bleve.NewSearchRequest(query)
 	} else {
-		query := bleve.NewQueryStringQuery(PreparingQuery(request.QueryString))
+		query := bleve.NewQueryStringQuery(request.QueryString)
 		searchRequest = bleve.NewSearchRequest(query)
 	}
 
-	if request.Highlight {
-		searchRequest.Fields = []string{"*"} // instead of being all fields, it should be all indexed fields.
-		searchRequest.Highlight = bleve.NewHighlight()
-	} else {
-		searchRequest.Fields = []string{"docType"}
-		if request.Name {
-			searchRequest.Fields = append(searchRequest.Fields, "name")
-		}
-		if request.Rev {
-			searchRequest.Fields = append(searchRequest.Fields, "_rev")
-		}
+	searchRequest.Fields = []string{"docType"}
+	if request.Name {
+		searchRequest.Fields = append(searchRequest.Fields, "name")
 	}
+	if request.Rev {
+		searchRequest.Fields = append(searchRequest.Fields, "_rev")
+	}
+
+	if request.Highlight {
+		searchRequest.IncludeLocations = true
+		searchRequest.Highlight = bleve.NewHighlight()
+	}
+
 	searchRequest.Size = request.NumbResults
 	searchRequest.From = request.Offset
 
