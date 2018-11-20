@@ -250,89 +250,41 @@ func UpdateIndex(instName string, docType string) error {
 
 	for i, result := range response.Results {
 
-		originalIndexLang := findWhichLangIndexDoc(indexes[instName].indexList[docType], result.DocID)
-
-		// Delete the files that are trashed = true or _deleted = true
-		if result.Doc.Get("_deleted") == true || result.Doc.Get("trashed") == true {
-			if originalIndexLang == "" {
-				// The file has already been deleted or hadn't had been indexed before either
-				continue
-			}
-			(*indexes[instName].indexList[docType][originalIndexLang]).Delete(result.DocID)
-			continue
-		}
-
-		if _, ok := result.Doc.M["name"]; !ok {
-			// TODO : find out out why some changes don't correspond to files only and thus don't have "name" field
-			fmt.Printf("Error on fetching name\n")
-			continue
-		}
-
 		if typ, ok := result.Doc.M["type"]; !ok || typ.(string) == "directory" {
 			// This is a directory, we ignore this doc
 			continue
 		}
 
+		originalIndexLang := findWhichLangIndexDoc(indexes[instName].indexList[docType], result.DocID)
+
+		// Delete the files that are trashed = true or _deleted = true
+		if result.Doc.Get("_deleted") == true || result.Doc.Get("trashed") == true {
+
+			err := DeleteDoc(instName, docType, originalIndexLang, result.DocID)
+			if err != nil {
+				fmt.Printf("Error on DeleteDoc: %s\n", err)
+				return err
+			}
+			continue
+		}
+
 		if originalIndexLang != "" {
 			// We found the document so we should update it in the original index
-			result.Doc.M["docType"] = docType
 
-			// If doc is a file and indexContent is true, we need to check if content has been modified since last indexation
-			if indexes[instName].indexContent && docType == consts.Files {
-				md5sum, err := getStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
-				if err != nil {
-					fmt.Printf("Error on getStoreMd5sum: %s\n", err)
-					return err
-				}
-				if md5sum != result.Doc.M["md5sum"] {
-					// Get new content and index it
-					content, err := getContentFile(instName, result.DocID)
-					if err != nil {
-						fmt.Printf("Error on getContentFile", err)
-						return err
-					}
-					result.Doc.M["content"] = content
-					err = setStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID, result.Doc.M["md5sum"].(string))
-					if err != nil {
-						fmt.Printf("Error on setStoreMd5sum: %s\n", err)
-						return err
-					}
-				} else {
-					// retrieve content stored in the index
-					content, err := getExistingContent(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
-					if err != nil {
-						fmt.Printf("Error on getExistingContent", err)
-						return err
-					}
-					result.Doc.M["content"] = content
-				}
-			}
-			batch[originalIndexLang].Index(result.DocID, result.Doc.M)
-		} else {
-			// We couldn't find the document, so we predict the language to index it in the right index
-			pred, err := ft_language.GetLanguage(result.Doc.M["name"].(string)) // TODO: predict on content and not "name" field in particular
+			err := UpdateDoc(batch, instName, docType, originalIndexLang, result)
 			if err != nil {
-				fmt.Printf("Error on language prediction:  %s\n", err)
-				continue
-			}
-			result.Doc.M["docType"] = docType
-
-			// If doc is a file and indexContent is true, we need to index content
-			if indexes[instName].indexContent && docType == consts.Files {
-				content, err := getContentFile(instName, result.DocID)
-				if err != nil {
-					fmt.Printf("Error on getContentFile", err)
-					return err
-				}
-				result.Doc.M["content"] = content
-				err = setStoreMd5sum(indexes[instName].indexList[docType][pred], result.DocID, result.Doc.M["md5sum"].(string))
-				if err != nil {
-					fmt.Printf("Error on setStoreMd5sum: %s\n", err)
-					return err
-				}
+				fmt.Printf("Error on UpdateDoc: %s\n", err)
+				return err
 			}
 
-			batch[pred].Index(result.DocID, result.Doc.M)
+		} else {
+			// We couldn't find the document, so we should create it in the predicted language index
+
+			err := CreateDoc(batch, instName, docType, result)
+			if err != nil {
+				fmt.Printf("Error on CreateDoc: %s\n", err)
+				return err
+			}
 		}
 
 		// Batch files
@@ -357,6 +309,91 @@ func UpdateIndex(instName string, docType string) error {
 	}
 
 	return nil
+}
+
+func DeleteDoc(instName string, docType string, originalIndexLang string, DocID string) error {
+	if originalIndexLang != "" {
+		return (*indexes[instName].indexList[docType][originalIndexLang]).Delete(DocID)
+	}
+	// else the file has already been deleted or hadn't had been indexed before either
+	return nil
+}
+
+func UpdateDoc(batch map[string]*bleve.Batch, instName string, docType string, originalIndexLang string, result couchdb.Change) error {
+	result.Doc.M["docType"] = docType
+
+	// If doc is a file and indexContent is true, we need to check if content has been modified since last indexation
+	if indexes[instName].indexContent && docType == consts.Files {
+		md5sum, err := getStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
+		if err != nil {
+			fmt.Printf("Error on getStoreMd5sum: %s\n", err)
+			return err
+		}
+		if md5sum != result.Doc.M["md5sum"] {
+			// Get new content and index it
+			content, err := getContentFile(instName, result.DocID)
+			if err != nil {
+				fmt.Printf("Error on getContentFile", err)
+				return err
+			}
+			result.Doc.M["content"] = content
+			err = setStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID, result.Doc.M["md5sum"].(string))
+			if err != nil {
+				fmt.Printf("Error on setStoreMd5sum: %s\n", err)
+				return err
+			}
+		} else {
+			// retrieve content stored in the index
+			content, err := getExistingContent(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
+			if err != nil {
+				fmt.Printf("Error on getExistingContent", err)
+				return err
+			}
+			result.Doc.M["content"] = content
+		}
+	}
+
+	return batch[originalIndexLang].Index(result.DocID, result.Doc.M)
+}
+
+func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, result couchdb.Change) error {
+
+	var pred string
+	var err error
+
+	// If doc is a file and indexContent is true, we need to index content
+	if indexes[instName].indexContent && docType == consts.Files {
+		content, err := getContentFile(instName, result.DocID)
+		if err != nil {
+			fmt.Printf("Error on getContentFile", err)
+			return err
+		}
+		result.Doc.M["content"] = content
+
+		pred, err = ft_language.GetLanguage(content)
+		fmt.Println("Predicted on content: " + pred)
+		if err != nil {
+			fmt.Printf("Error on language prediction:  %s\n", err)
+			return err
+		}
+
+		err = setStoreMd5sum(indexes[instName].indexList[docType][pred], result.DocID, result.Doc.M["md5sum"].(string))
+		if err != nil {
+			fmt.Printf("Error on setStoreMd5sum: %s\n", err)
+			return err
+		}
+	} else {
+		pred, err = ft_language.GetLanguage(result.Doc.M["name"].(string))
+		fmt.Println("Predicted on name: " + pred)
+		if err != nil {
+			fmt.Printf("Error on language prediction:  %s\n", err)
+			return err
+		}
+	}
+
+	result.Doc.M["docType"] = docType
+
+	return batch[pred].Index(result.DocID, result.Doc.M)
 }
 
 func ReIndex(instName string, docType string) error {
