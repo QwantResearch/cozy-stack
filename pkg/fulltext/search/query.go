@@ -181,10 +181,14 @@ func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []Sea
 			currFetched.Highlight = result.Fragments
 		}
 		if request.Name {
-			currFetched.Name = result.Fields["name"].(string)
+			if name, ok := result.Fields["name"]; ok {
+				currFetched.Name = name.(string)
+			}
 		}
 		if request.Rev {
-			currFetched.Rev = result.Fields["_rev"].(string)
+			if rev, ok := result.Fields["_rev"]; ok {
+				currFetched.Rev = rev.(string)
+			}
 		}
 		// currFetched := SearchResult{result.ID, (result.Fields["_rev"]).(string), (result.Fields["docType"]).(string), (result.Fields["name"]).(string), result.Fragments["name"][0]}
 		fetched[i] = currFetched

@@ -24,7 +24,7 @@ func GetAvailableLanguages() []string {
 	//TODO: store language in mapping description? (per doctype?)
 }
 
-func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string) error {
+func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string, highlight bool) error {
 
 	mappingDescription, err := GetDocTypeMappingFromDescriptionFile(docType)
 	if err != nil {
@@ -38,10 +38,10 @@ func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang
 	// See: https://groups.google.com/forum/#!searchin/bleve/dynamic|sort:date/bleve/XeztWQOlT7o/BZ4WvhqhBwAJ
 	documentMapping.Dynamic = false
 
-	AddFieldMappingsFromDescription(documentMapping, mappingDescription, lang)
+	AddFieldMappingsFromDescription(documentMapping, mappingDescription, lang, highlight)
 
 	// Add docType field mapping, as keyword, common to all doctypes
-	storeFieldMapping, err := CreateFieldMapping("storeField", lang)
+	storeFieldMapping, err := CreateFieldMapping("storeField", lang, false)
 	if err != nil {
 		fmt.Printf("Error when creating storeFieldMapping for docType: %s\n", err)
 		return err
@@ -54,7 +54,7 @@ func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang
 	return nil
 }
 
-func AddFieldMappingsFromDescription(documentMapping *mapping.DocumentMapping, mappingDescription map[string]interface{}, lang string) error {
+func AddFieldMappingsFromDescription(documentMapping *mapping.DocumentMapping, mappingDescription map[string]interface{}, lang string, highlight bool) error {
 
 	// mappingDescription must be either string or map[string]interface{}
 	// In the first case we create the corresponding mapping field and add it to the documentMapping
@@ -71,13 +71,13 @@ func AddFieldMappingsFromDescription(documentMapping *mapping.DocumentMapping, m
 			}
 			// Nested structure: call this function recursively
 			subDocumentMapping := bleve.NewDocumentMapping()
-			err := AddFieldMappingsFromDescription(subDocumentMapping, fieldMappingMap, lang)
+			err := AddFieldMappingsFromDescription(subDocumentMapping, fieldMappingMap, lang, highlight)
 			if err != nil {
 				return err
 			}
 			documentMapping.AddSubDocumentMapping(fieldName, subDocumentMapping)
 		} else {
-			newFieldMapping, err := CreateFieldMapping(fieldMappingString, lang)
+			newFieldMapping, err := CreateFieldMapping(fieldMappingString, lang, highlight)
 			if err != nil {
 				fmt.Printf("Error on creating mapping: %s\n", err)
 				return err
@@ -107,22 +107,34 @@ func GetDocTypeMappingFromDescriptionFile(docType string) (map[string]interface{
 	return mapping, nil
 }
 
-func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping, error) {
+func CreateFieldMapping(mappingType string, lang string, highlight bool) (*mapping.FieldMapping, error) {
 	switch mappingType {
 	case "textField":
 		textFieldMapping := bleve.NewTextFieldMapping()
 		textFieldMapping.Analyzer = lang
 		textFieldMapping.IncludeInAll = true
+		if !highlight {
+			textFieldMapping.Store = false
+		}
 		return textFieldMapping, nil
 	case "keywordField":
 		keywordFieldMapping := bleve.NewTextFieldMapping()
 		keywordFieldMapping.Analyzer = keyword.Name
+		if !highlight {
+			keywordFieldMapping.Store = false
+		}
 		return keywordFieldMapping, nil
 	case "numberField":
 		numberMapping := bleve.NewNumericFieldMapping()
+		if !highlight {
+			numberMapping.Store = false
+		}
 		return numberMapping, nil
 	case "dateField":
 		dateMapping := bleve.NewDateTimeFieldMapping()
+		if !highlight {
+			dateMapping.Store = false
+		}
 		return dateMapping, nil
 	case "storeField":
 		storeFieldMapping := bleve.NewTextFieldMapping()
@@ -131,6 +143,9 @@ func CreateFieldMapping(mappingType string, lang string) (*mapping.FieldMapping,
 		return storeFieldMapping, nil
 	case "timestampField":
 		timestampFieldMapping := bleve.NewDateTimeFieldMapping()
+		if !highlight {
+			timestampFieldMapping.Store = false
+		}
 		return timestampFieldMapping, nil
 	}
 

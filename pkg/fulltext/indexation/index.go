@@ -23,15 +23,17 @@ type updateIndexNotif struct {
 }
 
 type InstanceIndex struct {
-	indexList map[string]map[string]*bleve.Index
-	indexMu   *sync.Mutex
+	indexList      map[string]map[string]*bleve.Index
+	indexMu        *sync.Mutex
+	indexHighlight bool
+	indexContent   bool
 }
 
 const (
 	prefixPath = "bleve/index/"
 )
 
-var indexes map[string]InstanceIndex
+var indexes map[string]*InstanceIndex
 
 // Such as :
 // {
@@ -75,7 +77,7 @@ func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []strin
 
 	docTypeList = docTypeListInitialize
 
-	indexes = make(map[string]InstanceIndex)
+	indexes = make(map[string]*InstanceIndex)
 	for _, inst := range instances {
 		err = initializeIndexes(inst.DomainName())
 		if err != nil {
@@ -91,9 +93,11 @@ func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []strin
 func initializeIndexes(instName string) error {
 
 	var err error
-	indexes[instName] = InstanceIndex{
+	indexes[instName] = &InstanceIndex{
 		make(map[string]map[string]*bleve.Index, len(docTypeList)),
 		new(sync.Mutex),
+		true,
+		true,
 	}
 
 	indexes[instName].indexMu.Lock()
@@ -154,7 +158,7 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 	// Create it if it doesn't exist
 	if errOpen == bleve.ErrorIndexPathDoesNotExist {
 		indexMapping := bleve.NewIndexMapping()
-		err := AddTypeMapping(indexMapping, docType, lang)
+		err := AddTypeMapping(indexMapping, docType, lang, indexes[instName].indexHighlight)
 		if err != nil {
 			fmt.Printf("Error on adding type mapping: %s\n", err)
 			return nil, err
@@ -270,11 +274,11 @@ func UpdateIndex(instName string, docType string) error {
 		}
 
 		if originalIndexLang != "" {
-			// We found the document so we should update it the original index
+			// We found the document so we should update it in the original index
 			result.Doc.M["docType"] = docType
 
-			// If doc is a file, we need to check if content has been modified since last indexation
-			if docType == consts.Files {
+			// If doc is a file and indexContent is true, we need to check if content has been modified since last indexation
+			if indexes[instName].indexContent && docType == consts.Files {
 				md5sum, err := getStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
 				if err != nil {
 					fmt.Printf("Error on getStoreMd5sum: %s\n", err)
@@ -313,8 +317,8 @@ func UpdateIndex(instName string, docType string) error {
 			}
 			result.Doc.M["docType"] = docType
 
-			// If doc is a file, we need to index content
-			if docType == consts.Files {
+			// If doc is a file and indexContent is true, we need to index content
+			if indexes[instName].indexContent && docType == consts.Files {
 				content, err := getContentFile(instName, result.DocID)
 				if err != nil {
 					fmt.Printf("Error on getContentFile", err)
@@ -675,6 +679,34 @@ func checkInstanceDocType(instName string, docType string) error {
 		return errors.New("DocType not found in CheckInstanceDocType")
 	}
 	return nil
+}
+
+func SetOptionInstance(instName string, options map[string]bool) (map[string]bool, error) {
+	err := checkInstance(instName)
+	if err != nil {
+		// We try to initialize the indexes for this instance, for eventual futur updating
+		err = initializeIndexes(instName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
+	if content, ok := options["content"]; ok {
+		indexes[instName].indexContent = content
+	}
+
+	if highlight, ok := options["highlight"]; ok {
+		indexes[instName].indexHighlight = highlight
+	}
+
+	return map[string]bool{
+		"content":  indexes[instName].indexContent,
+		"higlight": indexes[instName].indexHighlight,
+	}, nil
+
 }
 
 func StartWorker() {

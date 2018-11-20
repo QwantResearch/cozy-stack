@@ -32,6 +32,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
 	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
 	router.POST("/_post_mapping/:doctype", PostMapping)
+	router.POST("/_fulltext_option", FulltextOption)
 }
 
 func SearchQuery(c echo.Context) error {
@@ -478,6 +479,46 @@ func PostMapping(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, nil)
+}
+
+func FulltextOption(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+	options := make(map[string]bool)
+
+	var instance string
+	var ok bool
+
+	if instance, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	if content, ok := body["content"].(bool); ok {
+		options["content"] = content
+	}
+
+	if highlight, ok := body["highlight"].(bool); ok {
+		options["highlight"] = highlight
+	}
+
+	options, err := indexation.SetOptionInstance(instance, options)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, options)
+
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {

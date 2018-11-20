@@ -238,7 +238,8 @@ For interacting with the indexation and query side, we created different routes 
 * the `fulltext/_delete_index` route calls `DeleteIndexLock()`. It requires a `docType` and `instance` string fields and allows for an optional `querySide` bool field to delete the index on the query side as well.
 * the `fulltext/_delete_all_indexes` route behaves the same as `fulltext/_delete_index` but calls the  `DeleteAllIndexesInstance()` function instead.
 * the `fulltext/_delete_index_query/:instance/:doctype/:lang` route is made for the indexation side to tell the query side to delete the corresponding index. It is called after `fulltext/_delete_all_indexes` or `fulltext/_delete_index` if `querySide` is set to `true`.
-* the `/_post_mapping/:doctype` route allows to send a new doctype mapping description file. The body is written in a tmp file and renamed to the correct description file name once it is entirely written (allowing for an atomic operation).
+* the `fulltext/_post_mapping/:doctype` route allows to send a new doctype mapping description file. The body is written in a tmp file and renamed to the correct description file name once it is entirely written (allowing for an atomic operation).
+* the `fulltext/_fulltext_option` route allows to set indexing options for an instance. It requires an `instance` string field and allows the following boolean fields : `content` and `highlight` that respectively means to index or not the content, and to store or not the fields to allow for highlight information when querying. For `higlight` to take effect, it requires to call `fulltext/_reindex_all`. Indeed `highlight` implies modifying the mapping, that is done at index initialization. Similarly, for files indexed previously, `content` won't modify the index retroactively, it might be preferable to call `fulltext/_reindex_all` to obtain a coherent index. 
 
 ## Performances
 
