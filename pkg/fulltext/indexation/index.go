@@ -30,7 +30,8 @@ type InstanceIndex struct {
 }
 
 const (
-	prefixPath = "bleve/index/"
+	prefixPath  = "bleve/index/"
+	ContentType = "io.cozy.files.content"
 )
 
 var indexes map[string]*InstanceIndex
@@ -94,7 +95,7 @@ func initializeIndexes(instName string) error {
 
 	var err error
 	indexes[instName] = &InstanceIndex{
-		make(map[string]map[string]*bleve.Index, len(docTypeList)),
+		make(map[string]map[string]*bleve.Index),
 		new(sync.Mutex),
 		true,
 		true,
@@ -102,6 +103,11 @@ func initializeIndexes(instName string) error {
 
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
+
+	err = initializeIndexDocType(instName, ContentType)
+	if err != nil {
+		return err
+	}
 
 	for _, docType := range docTypeList {
 		err = initializeIndexDocType(instName, docType)
@@ -313,7 +319,13 @@ func UpdateIndex(instName string, docType string) error {
 
 func DeleteDoc(instName string, docType string, originalIndexLang string, DocID string) error {
 	if originalIndexLang != "" {
-		return (*indexes[instName].indexList[docType][originalIndexLang]).Delete(DocID)
+		err := (*indexes[instName].indexList[docType][originalIndexLang]).Delete(DocID)
+		if err != nil {
+			return err
+		}
+		if indexes[instName].indexContent && docType == consts.Files {
+			return (*indexes[instName].indexList[ContentType][originalIndexLang]).Delete(DocID)
+		}
 	}
 	// else the file has already been deleted or hadn't had been indexed before either
 	return nil
@@ -333,27 +345,29 @@ func UpdateDoc(batch map[string]*bleve.Batch, instName string, docType string, o
 			// Get new content and index it
 			content, err := getContentFile(instName, result.DocID)
 			if err != nil {
-				fmt.Printf("Error on getContentFile", err)
+				fmt.Printf("Error on getContentFile: %s\n", err)
 				return err
 			}
-			result.Doc.M["content"] = content
+			err = updateContent(instName, originalIndexLang, result.DocID, content)
+			if err != nil {
+				fmt.Printf("Error on UpdateContent: %s\n", err)
+				return err
+			}
+
 			err = setStoreMd5sum(indexes[instName].indexList[docType][originalIndexLang], result.DocID, result.Doc.M["md5sum"].(string))
 			if err != nil {
 				fmt.Printf("Error on setStoreMd5sum: %s\n", err)
 				return err
 			}
-		} else {
-			// retrieve content stored in the index
-			content, err := getExistingContent(indexes[instName].indexList[docType][originalIndexLang], result.DocID)
-			if err != nil {
-				fmt.Printf("Error on getExistingContent", err)
-				return err
-			}
-			result.Doc.M["content"] = content
 		}
 	}
 
 	return batch[originalIndexLang].Index(result.DocID, result.Doc.M)
+}
+
+func updateContent(instName string, originalIndexLang string, docID string, content string) error {
+
+	return (*indexes[instName].indexList[ContentType][originalIndexLang]).Index(docID, map[string]string{"content": content, "docType": consts.Files})
 }
 
 func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, result couchdb.Change) error {
@@ -368,12 +382,17 @@ func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, r
 			fmt.Printf("Error on getContentFile", err)
 			return err
 		}
-		result.Doc.M["content"] = content
 
 		pred, err = ft_language.GetLanguage(content)
 		fmt.Println("Predicted on content: " + pred)
 		if err != nil {
 			fmt.Printf("Error on language prediction:  %s\n", err)
+			return err
+		}
+
+		err = updateContent(instName, pred, result.DocID, content)
+		if err != nil {
+			fmt.Printf("Error on UpdateContent: %s\n", err)
 			return err
 		}
 
@@ -423,6 +442,15 @@ func ReIndex(instName string, docType string) error {
 	}
 	// Add it to docTypeList if not already
 	addNewDoctypeToDocTypeList(docType)
+
+	if docType == consts.Files {
+		// Reinitialize the content index as well
+		deleteIndex(instName, ContentType, false)
+		err = initializeIndexDocType(instName, ContentType)
+		if err != nil {
+			return err
+		}
+	}
 
 	// Update index
 	err = AddUpdateIndexJob(instName, docType)
@@ -770,6 +798,13 @@ func StartWorker() {
 					err := sendIndexToQuery(notif.InstanceName, notif.DocType, lang) // TODO: deal with errors
 					if err != nil {
 						fmt.Printf("Error on sendIndexToQuery: %s\n", err)
+					}
+					if notif.DocType == consts.Files {
+						// Also send content to query side
+						err := sendIndexToQuery(notif.InstanceName, ContentType, lang)
+						if err != nil {
+							fmt.Printf("Error on sendIndexToQuery: %s\n", err)
+						}
 					}
 				}
 			}

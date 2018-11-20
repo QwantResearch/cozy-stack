@@ -533,7 +533,7 @@ func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
 		Rev:         true,
 		Offset:      0,
 		Order:       nil,
-		DocTypes:    []string{consts.Files}, // TODO : add all default doctypes
+		DocTypes:    []string{consts.Files, indexation.ContentType}, // TODO : add all default doctypes
 	}
 
 	if numbResults, ok := mapJSONRequest["numbResults"]; ok {
