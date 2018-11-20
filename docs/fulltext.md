@@ -257,5 +257,4 @@ Moreover, it appeared that the number of fields and the type of fields would cha
 * Test for performances on the cozy architecture,
 * Test for a good batch size on the cozy architecture,
 * Check that we are resilient in case of machine unavailability,
-* Raise an error while querying or updating after a certain time,
-* If the update fails, retreat the notification later.
+* Raise an error while querying or updating after a certain time.
