@@ -212,7 +212,7 @@ func UpdateIndex(c echo.Context) error {
 		})
 	}
 
-	err := indexation.AddUpdateIndexJob(instance, doctypeUpdate)
+	err := indexation.AddUpdateIndexJob(indexation.UpdateIndexNotif{instance, doctypeUpdate, 0})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),

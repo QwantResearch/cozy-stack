@@ -17,9 +17,10 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
-type updateIndexNotif struct {
+type UpdateIndexNotif struct {
 	InstanceName string
 	DocType      string
+	RetryCount   int
 }
 
 type InstanceIndex struct {
@@ -57,9 +58,11 @@ var languages []string
 
 var ft_language *FastText
 
-var updateQueue chan updateIndexNotif
+var updateQueue chan UpdateIndexNotif
 
-var indexUpdateRetryTime = time.Minute * 10
+var updateIndexRetryTimeMax = time.Minute * 10
+
+var updateIndexRetryCountMax = 5
 
 var updateQueueSize = 100
 
@@ -204,7 +207,7 @@ func UpdateAllIndexes() error {
 
 	for instName := range indexes {
 		for _, docType := range docTypeList {
-			err := AddUpdateIndexJob(instName, docType)
+			err := AddUpdateIndexJob(UpdateIndexNotif{instName, docType, 0})
 			if err != nil {
 				fmt.Printf("Could not add update index job: %s\n", err)
 			}
@@ -445,7 +448,7 @@ func ReIndex(instName string, docType string) error {
 	}
 
 	// Update index
-	err = AddUpdateIndexJob(instName, docType)
+	err = AddUpdateIndexJob(UpdateIndexNotif{instName, docType, 0})
 	if err != nil {
 		return err
 	}
@@ -790,22 +793,23 @@ func SetOptionInstance(instName string, options map[string]bool) (map[string]boo
 
 func StartWorker() {
 
-	updateQueue = make(chan updateIndexNotif, updateQueueSize)
+	updateQueue = make(chan UpdateIndexNotif, updateQueueSize)
 
-	go func(updateQueue <-chan updateIndexNotif) {
+	go func(updateQueue <-chan UpdateIndexNotif) {
 		for notif := range updateQueue {
 			err := UpdateIndex(notif.InstanceName, notif.DocType)
 			if err != nil {
 				fmt.Printf("Error on UpdateIndex: %s\n", err)
 				// We retry the indexation after an indexUpdateRetryTime
-				go func(instance string, docType string) {
-					timer := time.NewTimer(indexUpdateRetryTime)
+				go func(updateNotif UpdateIndexNotif) {
+					timer := time.NewTimer(updateIndexRetryTimeMax)
 					<-timer.C
-					err := AddUpdateIndexJob(instance, docType)
+					updateNotif.RetryCount += 1
+					err := AddUpdateIndexJob(updateNotif)
 					if err != nil {
 						fmt.Printf("Error on AddUpdateIndexJob: %s\n", err)
 					}
-				}(notif.InstanceName, notif.DocType)
+				}(notif)
 			} else {
 				// Send the new index to the search side
 				for lang := range indexes[notif.InstanceName].indexList[notif.DocType] {
@@ -826,11 +830,16 @@ func StartWorker() {
 	}(updateQueue)
 }
 
-func AddUpdateIndexJob(instName string, docType string) error {
+func AddUpdateIndexJob(updateNotif UpdateIndexNotif) error {
+
+	if updateNotif.RetryCount > updateIndexRetryCountMax {
+		return errors.New("RetryCount has exceeded updateIndexRetryCountMax for " + updateNotif.DocType + "doctype")
+	}
+
 	select {
-	case updateQueue <- updateIndexNotif{instName, docType}:
+	case updateQueue <- updateNotif:
 		return nil
 	default:
-		return errors.New("Update Queue is full, can't add new doctype to the update queue for now (docTypes before " + docType + " were correctly added to update queue).")
+		return errors.New("Update Queue is full, can't add new doctype to the update queue for now")
 	}
 }
