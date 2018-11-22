@@ -32,6 +32,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
 	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
 	router.POST("/_post_mapping/:doctype", PostMapping)
+	router.POST("/_remove_mapping", RemoveMapping)
 	router.POST("/_fulltext_option", FulltextOption)
 }
 
@@ -471,6 +472,36 @@ func PostMapping(c echo.Context) error {
 	}
 
 	err = os.Rename(tmpFile.Name(), indexation.MappingDescriptionPath+docType+".json")
+	if err != nil {
+		fmt.Println(err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
+func RemoveMapping(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var docType string
+	var ok bool
+	if docType, ok = body["docType"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("docType string field required.").Error(),
+		})
+	}
+
+	err := os.Remove(indexation.MappingDescriptionPath + docType + ".json")
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{

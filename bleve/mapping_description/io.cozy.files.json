@@ -3,6 +3,5 @@
     "tags": "keywordField",
     "created_at": "dateField",
     "updated_at": "dateField",
-    "_rev": "storeField",
-    "content": "textField"
+    "_rev": "storeField"
 }

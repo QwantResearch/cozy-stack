@@ -51,8 +51,6 @@ var indexes map[string]*InstanceIndex
 // 	}
 // }
 
-var docTypeList []string
-
 var instances []*instance.Instance
 
 var languages []string
@@ -65,7 +63,7 @@ var indexUpdateRetryTime = time.Minute * 10
 
 var updateQueueSize = 100
 
-func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []string) error {
+func StartIndex(instanceList []*instance.Instance) error {
 
 	instances = instanceList
 
@@ -75,8 +73,6 @@ func StartIndex(instanceList []*instance.Instance, docTypeListInitialize []strin
 	var err error
 
 	languages = GetAvailableLanguages()
-
-	docTypeList = docTypeListInitialize
 
 	indexes = make(map[string]*InstanceIndex)
 	for _, inst := range instances {
@@ -101,13 +97,13 @@ func initializeIndexes(instName string) error {
 		true,
 	}
 
-	indexes[instName].indexMu.Lock()
-	defer indexes[instName].indexMu.Unlock()
-
-	err = initializeIndexDocType(instName, ContentType)
+	docTypeList, err := GetDocTypeListFromDescriptionFile()
 	if err != nil {
 		return err
 	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
 
 	for _, docType := range docTypeList {
 		err = initializeIndexDocType(instName, docType)
@@ -134,6 +130,11 @@ func initializeIndexDocType(instName string, docType string) error {
 			return err
 		}
 	}
+
+	if docType == consts.Files {
+		return initializeIndexDocType(instName, ContentType)
+	}
+
 	return nil
 }
 
@@ -195,11 +196,14 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 }
 
 func UpdateAllIndexes() error {
+
+	docTypeList, err := GetDocTypeListFromDescriptionFile()
+	if err != nil {
+		return err
+	}
+
 	for instName := range indexes {
-		for docType := range indexes[instName].indexList {
-			if docType == ContentType {
-				continue
-			}
+		for _, docType := range docTypeList {
 			err := AddUpdateIndexJob(instName, docType)
 			if err != nil {
 				fmt.Printf("Could not add update index job: %s\n", err)
@@ -211,16 +215,18 @@ func UpdateAllIndexes() error {
 
 func UpdateIndex(instName string, docType string) error {
 
-	err := checkInstance(instName)
+	err := makeSureInstanceReady(instName)
 	if err != nil {
+		fmt.Printf("Error on makeSureInstanceReady: %s\n", err)
 		return err
 	}
 
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
 
-	err = checkInstanceDocType(instName, docType)
+	err = makeSureInstanceDocTypeReady(instName, docType)
 	if err != nil {
+		fmt.Printf("Error on makeSureInstanceDocTypeReady: %s\n", err)
 		return err
 	}
 
@@ -418,39 +424,24 @@ func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, r
 
 func ReIndex(instName string, docType string) error {
 
-	err := checkInstance(instName)
+	err := makeSureInstanceReady(instName)
 	if err != nil {
-		// Not existing already, try to initialize it (for mutex)
-		err = initializeIndexes(instName)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	indexes[instName].indexMu.Lock()
 	defer indexes[instName].indexMu.Unlock()
 
-	err = checkInstanceDocType(instName, docType)
-	if err == nil {
-		// Already exists, need to remove
-		deleteIndex(instName, docType, false)
+	err = makeSureInstanceDocTypeReady(instName, docType)
+	if err != nil {
+		return err
 	}
+	deleteIndex(instName, docType, false)
 
 	// Re-initialize indexes var with docType
 	err = initializeIndexDocType(instName, docType)
 	if err != nil {
 		return err
-	}
-	// Add it to docTypeList if not already
-	addNewDoctypeToDocTypeList(docType)
-
-	if docType == consts.Files {
-		// Reinitialize the content index as well
-		deleteIndex(instName, ContentType, false)
-		err = initializeIndexDocType(instName, ContentType)
-		if err != nil {
-			return err
-		}
 	}
 
 	// Update index
@@ -464,6 +455,11 @@ func ReIndex(instName string, docType string) error {
 
 func ReIndexAll(instName string) error {
 
+	docTypeList, err := GetDocTypeListFromDescriptionFile()
+	if err != nil {
+		return err
+	}
+
 	for _, docType := range docTypeList {
 		err := ReIndex(instName, docType)
 		if err != nil {
@@ -472,17 +468,6 @@ func ReIndexAll(instName string) error {
 	}
 
 	return nil
-}
-
-func addNewDoctypeToDocTypeList(newDocType string) {
-	for _, docType := range docTypeList {
-		if docType == newDocType {
-			return
-		}
-	}
-
-	// newDocType not found
-	docTypeList = append(docTypeList, newDocType)
 }
 
 func ReplicateAll(instName string) error {
@@ -653,6 +638,9 @@ func DeleteAllIndexesInstance(instName string, querySide bool) error {
 	defer indexes[instName].indexMu.Unlock()
 
 	for docType := range indexes[instName].indexList {
+		if docType == ContentType {
+			continue
+		}
 		err := deleteIndex(instName, docType, querySide)
 		if err != nil {
 			return err
@@ -702,6 +690,10 @@ func deleteIndex(instName string, docType string, querySide bool) error {
 
 	delete(indexes[instName].indexList, docType)
 
+	if docType == consts.Files {
+		return deleteIndex(instName, ContentType, querySide)
+	}
+
 	return nil
 }
 
@@ -733,6 +725,32 @@ func notifyDeleteIndexQuery(instName string, docType string, lang string) error 
 	return nil
 }
 
+func makeSureInstanceReady(instName string) error {
+	err := checkInstance(instName)
+	if err != nil {
+		// Not existing already, try to initialize it (for mutex)
+		err = initializeIndexes(instName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeSureInstanceDocTypeReady(instName string, docType string) error {
+	// Call only inside a mutex lock
+	// indexes[instName] must be set
+
+	err := checkInstanceDocType(instName, docType)
+	if err != nil {
+		err = initializeIndexDocType(instName, docType)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func checkInstance(instName string) error {
 	if _, ok := indexes[instName]; !ok {
 		return errors.New("Instance not found in CheckInstance")
@@ -748,13 +766,9 @@ func checkInstanceDocType(instName string, docType string) error {
 }
 
 func SetOptionInstance(instName string, options map[string]bool) (map[string]bool, error) {
-	err := checkInstance(instName)
+	err := makeSureInstanceReady(instName)
 	if err != nil {
-		// We try to initialize the indexes for this instance, for eventual futur updating
-		err = initializeIndexes(instName)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	indexes[instName].indexMu.Lock()
@@ -772,7 +786,6 @@ func SetOptionInstance(instName string, options map[string]bool) (map[string]boo
 		"content":  indexes[instName].indexContent,
 		"higlight": indexes[instName].indexHighlight,
 	}, nil
-
 }
 
 func StartWorker() {
