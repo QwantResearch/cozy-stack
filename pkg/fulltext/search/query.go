@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -31,6 +32,8 @@ type SearchResult struct {
 const (
 	SearchPrefixPath = "bleve/query/"
 )
+
+var waitDuration = 2 * time.Second
 
 func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []*bleve.Index, error) {
 
@@ -64,8 +67,7 @@ func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []
 					fmt.Printf("Error on opening index: %s\n", err2)
 					return nil, nil, err2
 				}
-			}
-			if err != nil && err != bleve.ErrorIndexMetaMissing {
+			} else if err != nil {
 				fmt.Printf("Error on opening index: %s\n", err)
 				// TODO : deal with thar error better in case of index not ready yet
 				return nil, nil, err
@@ -98,7 +100,7 @@ func QueryIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	searchRequest := BuildQuery(request, false)
 
-	searchResults, err := indexAlias.Search(searchRequest)
+	searchResults, err := SearchWithTimeout(indexAlias, searchRequest)
 	if err != nil {
 		fmt.Printf("Error on querying: %s\n", err)
 		return nil, 0, err
@@ -132,7 +134,7 @@ func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 
 	searchRequest := BuildQuery(request, true)
 
-	searchResults, err := indexAlias.Search(searchRequest)
+	searchResults, err := SearchWithTimeout(indexAlias, searchRequest)
 	if err != nil {
 		fmt.Printf("Error on querying: %s\n", err)
 		return nil, 0, err
@@ -143,6 +145,29 @@ func QueryPrefixIndex(request QueryRequest) ([]SearchResult, int, error) {
 	fetched := BuildResults(request, searchResults)
 
 	return fetched, int(searchResults.Total), nil
+}
+
+func SearchWithTimeout(indexAlias bleve.IndexAlias, searchRequest *bleve.SearchRequest) (*bleve.SearchResult, error) {
+	// We use SearchInContext to set a timeout on search.
+	// See: https://groups.google.com/d/msg/bleve/f7Qnhb9qfoM/S6mUS3HuAwAJ
+	// And: https://groups.google.com/d/msg/bleve/U6MtvUK_sVI/JOc2tsjuAwAJ
+
+	ctx, _ := context.WithTimeout(context.Background(), waitDuration)
+	searchResults, err := indexAlias.SearchInContext(ctx, searchRequest)
+	if err != nil {
+		fmt.Printf("Error on querying: %s\n", err)
+		return nil, err
+	}
+
+	if searchResults.Status.Successful == 0 {
+		// We consider that we return an error only if there was no success at all
+		// Indeed, some of the indexes may have return a result before timeout and we should still return these
+
+		fmt.Printf("No search result successful: %s\n", context.DeadlineExceeded)
+		return nil, context.DeadlineExceeded
+	}
+
+	return searchResults, nil
 }
 
 func BuildQuery(request QueryRequest, prefix bool) *bleve.SearchRequest {
