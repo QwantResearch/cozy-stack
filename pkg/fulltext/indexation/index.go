@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -28,6 +29,11 @@ type InstanceIndex struct {
 	indexMu        *sync.Mutex
 	indexHighlight bool
 	indexContent   bool
+}
+
+type OptionsIndex struct {
+	Highlight bool `yaml:highlight`
+	Content   bool `yaml:content`
 }
 
 const (
@@ -92,12 +98,16 @@ func StartIndex(instanceList []*instance.Instance) error {
 
 func initializeIndexes(instName string) error {
 
-	var err error
+	options, err := GetOptionsInstance(instName)
+	if err != nil {
+		fmt.Printf("Error on GetOptionsInstance", err)
+	}
+
 	indexes[instName] = &InstanceIndex{
 		make(map[string]map[string]*bleve.Index),
 		new(sync.Mutex),
-		true,
-		true,
+		options.Highlight,
+		options.Content,
 	}
 
 	docTypeList, err := GetDocTypeListFromDescriptionFile()
@@ -768,7 +778,49 @@ func checkInstanceDocType(instName string, docType string) error {
 	return nil
 }
 
-func SetOptionInstance(instName string, options map[string]bool) (map[string]bool, error) {
+func GetOptionsInstance(instName string) (OptionsIndex, error) {
+	options := OptionsIndex{false, false}
+
+	data, err := ioutil.ReadFile(prefixPath + instName + "/config.yaml")
+	if err != nil {
+		err := WriteOptionsInstance(instName, options)
+		if err != nil {
+			return options, err
+		}
+		return options, nil
+	}
+
+	err = yaml.Unmarshal([]byte(data), &options)
+	if err != nil {
+		return options, err
+	}
+
+	return options, nil
+}
+
+func WriteOptionsInstance(instName string, options OptionsIndex) error {
+	data2, err := yaml.Marshal(options)
+	if err != nil {
+		fmt.Printf("Error on marshal yaml", err)
+		return err
+	}
+
+	err = os.MkdirAll(prefixPath+instName+"/", 0777)
+	if err != nil {
+		fmt.Printf("Error on mkdirall", err)
+		return err
+	}
+
+	err = ioutil.WriteFile(prefixPath+instName+"/config.yaml", data2, 0666)
+	if err != nil {
+		fmt.Printf("Error on write file: %s\n", err)
+		return err
+	}
+
+	return nil
+}
+
+func SetOptionsInstance(instName string, options map[string]bool) (map[string]bool, error) {
 	err := makeSureInstanceReady(instName)
 	if err != nil {
 		return nil, err
@@ -783,6 +835,11 @@ func SetOptionInstance(instName string, options map[string]bool) (map[string]boo
 
 	if highlight, ok := options["highlight"]; ok {
 		indexes[instName].indexHighlight = highlight
+	}
+
+	err = WriteOptionsInstance(instName, OptionsIndex{indexes[instName].indexHighlight, indexes[instName].indexContent})
+	if err != nil {
+		return nil, err
 	}
 
 	return map[string]bool{

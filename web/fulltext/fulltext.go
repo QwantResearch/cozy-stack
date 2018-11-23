@@ -541,7 +541,7 @@ func FulltextOption(c echo.Context) error {
 		options["highlight"] = highlight
 	}
 
-	options, err := indexation.SetOptionInstance(instance, options)
+	options, err := indexation.SetOptionsInstance(instance, options)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
