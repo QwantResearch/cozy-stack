@@ -34,6 +34,10 @@ const (
 
 func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []*bleve.Index, error) {
 
+	if len(docTypeList) == 0 {
+		return nil, nil, fmt.Errorf("DocTypeList can't be empty")
+	}
+
 	// Deal with languages and docTypes dynamically instead
 	languages := []string{"fr", "en"}
 
@@ -44,12 +48,24 @@ func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []
 	for _, lang := range languages {
 		for _, docType := range docTypeList {
 			path := SearchPrefixPath + instName + "/" + lang + "/" + docType
-			index, err := bleve.Open(path)
+			index, err := bleve.OpenUsing(path, map[string]interface{}{
+				"read_only": true,
+			})
 			if err == bleve.ErrorIndexMetaMissing {
-				CreateMetaIndexJson(path)
-				index, err = bleve.Open(path)
+				err2 := CreateMetaIndexJson(path)
+				if err2 != nil {
+					fmt.Printf("Error on CreateMetaIndexJson: %s\n", err2)
+					return nil, nil, err2
+				}
+				index, err2 = bleve.OpenUsing(path, map[string]interface{}{
+					"read_only": true,
+				})
+				if err2 != nil {
+					fmt.Printf("Error on opening index: %s\n", err2)
+					return nil, nil, err2
+				}
 			}
-			if err != nil {
+			if err != nil && err != bleve.ErrorIndexMetaMissing {
 				fmt.Printf("Error on opening index: %s\n", err)
 				// TODO : deal with thar error better in case of index not ready yet
 				return nil, nil, err
@@ -204,7 +220,11 @@ func CreateMetaIndexJson(path string) error {
 		fmt.Println(err)
 		return err
 	}
-	f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
-	f.Close()
-	return nil
+
+	_, err = f.WriteString("{\"storage\":\"boltdb\",\"index_type\":\"upside_down\"}")
+	if err != nil {
+		return err
+	}
+
+	return f.Close()
 }
