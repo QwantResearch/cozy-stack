@@ -389,7 +389,7 @@ func UpdateDoc(batch map[string]*bleve.Batch, instName string, docType string, o
 
 func updateContent(instName string, originalIndexLang string, docID string, content string) error {
 
-	return (*indexes[instName].indexList[ContentType][originalIndexLang]).Index(docID, map[string]string{"content": content, "docType": consts.Files})
+	return (*indexes[instName].indexList[ContentType][originalIndexLang]).Index(docID, map[string]string{"content": content, "docType": ContentType})
 }
 
 func CreateDoc(batch map[string]*bleve.Batch, instName string, docType string, result couchdb.Change) error {
