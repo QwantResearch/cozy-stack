@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/blevesearch/bleve"
@@ -126,6 +127,17 @@ func GetDocTypeListFromDescriptionFile() ([]string, error) {
 	}
 
 	return docTypeList, nil
+}
+
+func GetMappingVersionFromDescriptionFile(docType string) (string, error) {
+
+	fileInfo, err := os.Stat(MappingDescriptionPath + docType + ".json")
+	if err != nil {
+		fmt.Printf("Error on getting description file: %s\n", err)
+		return "", err
+	}
+
+	return fileInfo.ModTime().String(), nil
 }
 
 func CreateFieldMapping(mappingType string, lang string, highlight bool) (*mapping.FieldMapping, error) {

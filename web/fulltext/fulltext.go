@@ -33,6 +33,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
 	router.POST("/_post_mapping/:doctype", PostMapping)
 	router.POST("/_remove_mapping", RemoveMapping)
+	router.POST("/_get_mapping_version", GetMappingVersion)
 	router.POST("/_fulltext_option", FulltextOption)
 }
 
@@ -510,6 +511,49 @@ func RemoveMapping(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, nil)
+}
+
+func GetMappingVersion(c echo.Context) error {
+
+	var body map[string]interface{}
+
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		fmt.Printf("Error on decoding request: %s\n", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": errors.New("Could not decode the request").Error(),
+		})
+	}
+
+	var docType string
+	var instance string
+	var lang string
+	var ok bool
+	if docType, ok = body["docType"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("docType string field required.").Error(),
+		})
+	}
+
+	if lang, ok = body["lang"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("lang string field required.").Error(),
+		})
+	}
+
+	if instance, ok = body["instance"].(string); !ok {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": errors.New("instance string field required.").Error(),
+		})
+	}
+
+	version, err := indexation.GetMappingVersion(instance, docType, lang)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{"mappingVersion": version})
 }
 
 func FulltextOption(c echo.Context) error {

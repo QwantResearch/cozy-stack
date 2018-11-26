@@ -178,7 +178,13 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 	// Create it if it doesn't exist
 	if errOpen == bleve.ErrorIndexPathDoesNotExist {
 		indexMapping := bleve.NewIndexMapping()
-		err := AddTypeMapping(indexMapping, docType, lang, indexes[instName].indexHighlight)
+		version, err := GetMappingVersionFromDescriptionFile(docType)
+		if err != nil {
+			fmt.Printf("Error on getting mapping version: %s\n", err)
+			return nil, err
+		}
+
+		err = AddTypeMapping(indexMapping, docType, lang, indexes[instName].indexHighlight)
 		if err != nil {
 			fmt.Printf("Error on adding type mapping: %s\n", err)
 			return nil, err
@@ -194,6 +200,13 @@ func getIndex(instName string, docType string, lang string) (*bleve.Index, error
 		err = setStoreSeq(&i, "0")
 		if err != nil {
 			fmt.Printf("Error on SetStoreSeq: %s\n", err)
+			return nil, err
+		}
+
+		// Set the mapping version when creating an index
+		err = setStoreMappingVersion(&i, version)
+		if err != nil {
+			fmt.Printf("Error on setStoreMappingVersion: %s\n", err)
 			return nil, err
 		}
 
@@ -621,6 +634,17 @@ func getStoreMd5sum(index *bleve.Index, fileId string) (string, error) {
 	return string(res), err
 }
 
+func setStoreMappingVersion(index *bleve.Index, version string) error {
+	// Call only inside a mutex lock
+	return (*index).SetInternal([]byte("mappingVersion"), []byte(version))
+}
+
+func getStoreMappingVersion(index *bleve.Index) (string, error) {
+	// Call only inside a mutex lock
+	res, err := (*index).GetInternal([]byte("mappingVersion"))
+	return string(res), err
+}
+
 func getExistingContent(index *bleve.Index, id string) (string, error) {
 	// Call only inside a mutex lock
 	doc, err := (*index).Document(id)
@@ -778,6 +802,15 @@ func checkInstanceDocType(instName string, docType string) error {
 	return nil
 }
 
+func checkInstanceDocTypeLang(instName string, docType string, lang string) error {
+	for l, _ := range indexes[instName].indexList[docType] {
+		if l == lang {
+			return nil
+		}
+	}
+	return errors.New("Language not found in checkInstanceDocTypeLang")
+}
+
 func GetOptionsInstance(instName string) (OptionsIndex, error) {
 	options := OptionsIndex{false, false}
 
@@ -846,6 +879,29 @@ func SetOptionsInstance(instName string, options map[string]bool) (map[string]bo
 		"content":  indexes[instName].indexContent,
 		"higlight": indexes[instName].indexHighlight,
 	}, nil
+}
+
+func GetMappingVersion(instName string, docType string, lang string) (string, error) {
+
+	err := checkInstance(instName)
+	if err != nil {
+		return "", err
+	}
+
+	indexes[instName].indexMu.Lock()
+	defer indexes[instName].indexMu.Unlock()
+
+	err = checkInstanceDocType(instName, docType)
+	if err != nil {
+		return "", err
+	}
+
+	err = checkInstanceDocTypeLang(instName, docType, lang)
+	if err != nil {
+		return "", err
+	}
+
+	return getStoreMappingVersion(indexes[instName].indexList[docType][lang])
 }
 
 func StartWorker() {
