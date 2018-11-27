@@ -6,12 +6,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
-type UpdateIndexNotif struct {
-	InstanceName string
-	DocType      string
-	RetryCount   int
-}
-
 type OptionsIndex struct {
 	Highlight bool `yaml:highlight`
 	Content   bool `yaml:content`

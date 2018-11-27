@@ -8,6 +8,12 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 )
 
+type UpdateIndexNotif struct {
+	InstanceName string
+	DocType      string
+	RetryCount   int
+}
+
 var updateQueue chan UpdateIndexNotif
 
 var updateIndexRetryTimeMax = time.Minute * 10
