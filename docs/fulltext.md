@@ -26,64 +26,88 @@ To quickly get started, we focused on three doctypes: photo albums, files and ba
 
 ## Indexation
 
-The indexation code is at [pkg/index/index.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index.go).
+The indexation code is at [pkg/fulltext/indexation/index.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index.go).
 
 The indexes are stored on the default KVStore: [BoltDB](https://github.com/boltdb/bolt).
 
-The function to start the indexes on the indexation side is `StartIndex()`. It takes a list of instance and a list of docTypes to index as arguments. It loads the language detection model and initializes global vars.
+The function to start the indexes on the indexation side is `StartIndex()`. It takes a list of instance as argument. It loads the language detection model and initializes an `IndexController` object.
+
+Following this initialization, the `StartIndex()` function starts the worker that is going to process the notification queue. It finally calls `indexController.UpdateAllIndexes()`, that iterates on all the indexes calling `AddUpdateIndexJob()` on each.
+
+
+### IndexController
+
+The indexController code is at [pkg/fulltext/indexation/index_controller.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index_controller.go).
+
+The `indexController` is the interface with the indexes for any index manipulation: initiate, delete, update, replicate, reindex, ...
+It is responsible for making the appropriate checks before trying any manipulation and locking or unlocking a mutex if needed.
+The following functions all lock the mutex: `indexController.UpdateIndex()`, `indexController.DeleteIndex()`, `indexController.DeleteAllIndexesInstance()`, `indexController.Replicate()`, `indexController.ReplicateAll()`, `indexController.ReIndex()`, `indexController.ReIndexAll()`, `indexController.initializeIndexes()`. 
  
-It calls `initializeIndexes()` for each instance. This function allocates the right `InstanceIndex` object and store it in `indexes` and call `initializeIndexDocType()` on each docType. This last function will allocate the mapping between `docType`, `lang` and `bleve.Index`. It will then call `getIndex()` for each.
-The `getIndex()` function either fetches the index from the disk or creates it if not found. In the second case, it sets their mapping and stores their couchdb sequence number to 0 (the default). No indexation is made at this stage however.
+The `indexController.init()` calls `indexController.initializeIndexes()` for each instance. This function sets the options returned by `indexController.GetOptionsInstance()` and allocates the right `InstanceIndex` object and initializes it, calling `instanceIndex.initializeIndexDocType()` on each doctype.
+
+### IndexInstance
+
+The indexInstance code is at [pkg/fulltext/indexation/index_instance.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index_instance.go).
+
+The `InstanceIndex` object contains :
+- an `indexList` storing the underlying indexes, 
+- an `indexMu` that is a mutex protecting this instance,
+- an `indexHighlight` that is a boolean. If set to true, we will store fields to allow for highlight when querying,
+- an `indexContent` that is a boolean. If set to true, we will index content associated with a file,
+- an `instName` that is a string to easily access the instance name.
+
+The `instanceIndex.initializeIndexDocType()` creates the `indexList` and allocates the mapping between `docType`, `lang` and `IndexWrapper`. It will then call `instanceIndex.getIndex()` for each.
+The `instanceIndex.getIndex()` function either fetches the index from the disk or creates it if not found. In the second case, it sets their mapping, stores the mapping version and stores their couchdb sequence number to 0 (the default). No indexation is made at this stage however.
 We now have one index per instance, per doctype (3 in our examples) and per language that are initialized.
-
-Following this initialization, the `StartIndex()` function starts the worker that is going to process the notification queue. It finally calls `UpdateAllIndexes()`, that iterates on all the indexes calling `AddUpdateIndexJob()` on each.
-
-All indexing operations are made with a mutex. There is one mutex per instance. The following functions all lock the mutex to protect the indexes and to make sure the index won't be modified/removed along the way: `IndexUpdate()`, `DeleteIndexLock()`, `DeleteAllIndexesInstance()`, `Replicate()`, `ReplicateAll()`, `ReIndex()`, `initializeIndexes()`.
-
-On the contrary, the following function should be called only inside a mutex lock: `deleteIndex()`, `initializeIndexDocType()`, `getIndex()`, `setStoreSeq()`, `getStoreSeq()`, `setStoreMd5sum()`, `getStoreMd5sum()`, `getExistingContent()`.
 
 ### Workers and Jobs
 
+The indexation worker code is at [pkg/fulltext/indexation/index_worker.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index_worker.go).
+
 A notification system is used for indexing, instead of a periodic trigger. It allows the indexer to fetch updates in `CouchDB` only in case of a modification (creation, update, deletion).
 
-Notification for update jobs are sent to `AddUpdateIndexJob()`. This function adds the couple `(instanceName, docType)` to a job queue (a golang channel).
+Notification for update jobs are sent to `AddUpdateIndexJob()`. This function adds an object `UpdateIndexNotif` (that contains an `instanceName`, a`docType` and a `RetryCount`) to a job queue (a golang channel).
 
-The update worker is processing those jobs. It first calls `IndexUpdate()` and if this operation was successful, it calls `sendIndexToQuery()` to replicate the updated index on the query side (over http).
+The update worker is processing those jobs. It first calls `indexController.UpdateIndex()` that init an `IndexUpdater` object (that contains an `instName`, two booleans: `content` and `highlight` and two `map[string]*BatchIndex`: `batchIndex` and `batchIndexContent`) and calls `indexUpdater.UpdateIndex()`. 
+
+If the update was successful, it calls `indexController.SendIndexToQuery()` to replicate the updated index on the query side (over http).
+
+Else, it will increments the `updateIndexNotif.RetryCount` and re-add the notif to the queue.
+If the `RetryCount` exceeds the `updateIndexRetryCountMax`, the job will be removed from the queue. 
 
 ### Indexing
 
-`IndexUpdate()` fetch the last couchdb sequence recorded in the index and use `couchdb.GetChanges()` to retrieve all the changes since that last sequence number. Since it is 0 when an index is created, it fetches all files in this couchdb.
+The indexUpdate code is at [pkg/fulltext/indexation/index_update.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index_update.go).
 
-Afterwards, there are three cases to take into account :
+`indexUpdater.IndexUpdate()` calls `indexUpdate.getResults()` that fetches the last couchdb sequence recorded in the index and uses `couchdb.GetChanges()` to retrieve all the changes since that last sequence number. Since it is 0 when an index is created, it fetches all files in this couchdb.
+
+Afterwards, there are three cases to take into account for a result:
 
 * the document is new. It means we have to detect its language and index it in the corresponding index.
 * the document is updated and was already indexed. In this case, we need to find which index it belonged to, independently of its current language, to prevent having it indexed in two different indexes, and reindex it. Bleve doesn't allow to update specific fields, the entire document must be reindexed ([Bleve Google Groups](https://groups.google.com/forum/?utm_medium=email&utm_source=footer#!msg/bleve/v1E57t5lU3U/QTMLxaK9BwAJ)) : 
 
-> There is no mechanism to update a single field value for a document.  You have to provide the entire document again, containing the updated field value.
+    > There is no mechanism to update a single field value for a document.  You have to provide the entire document again, containing the updated field value.
 
 * the document was indexed and is now trashed or destroyed. We have to find the index it belonged to and delete it from this index.
 
 In term of implementation, since we don't know if the document is new or updated, we look for it in the indexes and if we couldn't find it, we consider it new.
 
 The indexation is done by batch, which means that we have a batch for every language and we index them every 300 documents (in total, not per language). *The choice of 300 should be tested on the cozy architecture.*
+We use the `BatchIndex` objects to index document. It keeps a count of the batch size and indexes the changes once the current batch exceeds the `batchSize` value.
+When all document have been treated, we call `batchIndex.Close()` that will index the last not already indexed batch. 
 
 Finally, the new sequence number returned by `couchdb.GetChanges()` is stored in every index. Thus, 2 indexes of the same doctype (French and English) will both have the same sequence number.
 
 #### File content
 In the particular case of files, we need to fetch the content separately and to index it. Using a mock `getContentFile()` function, we implement a solution using the `md5sum` field that let us know the `md5sum` of the file content. 
 
-When indexing a file for the first time, we use `getContentFile()` to add it to the `content` field, that is mapped as a `textField`. Then we store the `md5sum` in the underlying store (similarly to the sequence number). 
+When indexing a file for the first time, we use `getContentFile()` to retrieve the content and send it to `batchIndexContent.Index()`. Then we store the `md5sum` in the underlying store (similarly to the sequence number). 
 
-When the file is returned on `couchdb.GetChanges()`, we check for the `md5sum` to compare it with the stored value to know if the content has been updated and we need to fetch it or not. If this is the case, we proceed as previously. Else, since an update operation overwrites the document indexed previously, we still need to fetch the previous content. We then call the `getExistingContent()` that returns what had been stored in index.
-
-This solution implies that we store the content, and not just the indexed version. It might be limiting as file content may be very heavy.
-The other alternative would be to index the content in a separate index. It means that we should manage both indexes accordingly, when creating, updating and deleting a file, but also when manipulating the index (replicating, reindexing, sending it to the query side).
-
-*The pros and the cons should be weighed to decide on a solution.*
+When the file is updated later on, we check for the `md5sum` to compare it with the stored value to know if the content has been modified and we need to fetch it or not. If this is the case, we proceed as previously. Else, we don't have to modify the content index.
 
 ### Mapping
 
-Each index has its appropriate mapping (see [pkg/index/mapping.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/mapping.go)).
+Each index has its appropriate mapping (see [pkg/fulltext/indexation/mapping.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/mapping.go)).
 
 The mapping for each docType is described in a json file. The structure of the file is the following one:
 `{
@@ -108,6 +132,8 @@ The usage of numeric fields should be selective ([Bleve Issue 831](https://githu
 
 > In bleve today numeric fields are very expensive to index, as they are optimized for later doing numeric range searches. But, this optimization means that numeric fields can take up to 16x the space of text field with a single term. This is something we hope to improve in the future, but for now it means you have to be very selective about including numeric fields. Having lots of numeric fields means the index will be quite large (and consequently slow). 
 
+Additionally, we set the `indexMapping.DefaultAnalyzer` so that if we make a query without specifying which field to compare with, it will be this analyzer that will be used. 
+
 ### Language Detection
 
 We use a [FastText](https://fasttext.cc) model ([lid.176.ftz](https://fasttext.cc/docs/en/language-identification.html)), to detect the language of a document.
@@ -119,20 +145,33 @@ Since we limit the languages to French and English, we iterate on the predicted 
 
 The language detection doesn't necessarily returns all languages as prediction, and in particular it sometimes happens to return neither "fr" nor "en". By default, we return "en" in this case.
 
+### IndexWrapper and underlying store
+
+The IndexWrapper code is at [pkg/fulltext/indexation/index_wrapper.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index_wrapper.go).
+
+To allow to manipulate the store underlying the bleve indexes, we create an `IndexWrapper` struct that contains a single `bleve.Index` field.
+The wrapper implements setter and getter for the sequence number, the md5sum value (for file content) and the mapping version used (based on last modification time).
+
+For example, the `setStoreSeq()` and `getStoreSeq()` functions are used to store and retrieve the sequence number associated with an index, so that we can fetch the changes since this last sequence number.
+
+In order to store the sequence number directly in the index, we use the bleve `SetInternal()` function that allows us to store additional information into the store, without it being taken into account in the index.
+
+The `GetInteral()` function allows us to retrieve this information. 
+
 ### Reindex
 
-The `ReIndexAll()` function takes an instance name as argument and calls `ReIndex()` on all the indexes from this instance.
+The `indexController.ReIndexAll()` function takes an instance name as argument and calls `instanceIndex.ReIndex()` on all the docTypes that exist in the mapping description folder.
 
-The `ReIndex()` function removes the index from the disk (if found) and creates a new one.
+The `instanceIndex.ReIndex()` function removes the index from the disk (if found) and creates a new one.
 
-In order to reindex, it starts by checking if the instance has any index associated already. If not, it initializes an `InstanceIndex` object. This way, it can lock the mutex. 
+In order to reindex, it starts by making sure that an `InstanceIndex` object is initialized for this instance. 
 Then it checks whether this particular doctype index existed in this instance. If this is the case, it removes it calling `deleteIndex()`. 
-It then re-initializes the index for this doctype calling `initializeIndexDocType()`. It also adds the doctype to the doctype list if wasn't in the list already. 
-Finally, it adds an update job for this couple `(instance, doctype)` calling `AddUpdateIndexJob()`.
+It then re-initializes the index for this doctype calling `initializeIndexDocType()`.
+Finally, it adds an update job for this couple `(instance, doctype, retrycount=0)` calling `AddUpdateIndexJob()`.
 
 ### Replicate
 
-The `ReplicateAll()` function calls `Replicate()` on each index.
+The `indexController.ReplicateAll()` function calls `instanceIndex.ReplicateAll()` for the appropriate instance, and this one calls `instanceIndex.Replicate()` on each index.
 
 `Replicate()` obtains an `io.Writer` from the specified path. Next, it uses the `.Advanced()` function from bleve to access the store and get a reader. Then, it uses the `WriteTo()` function implemented in the Index branch of the repository [QwantResearch/bleve](https://github.com/QwantResearch/bleve/tree/Index) and writes into a tmp file.
 
@@ -141,27 +180,19 @@ This `WriteTo()` function was implemented for BoltDB only. It uses the `tx.Write
 
 Finally, it closes the file and the reader and returns the file name.
 
-### Set and Get the sequence number
-
-The functions `setStoreSeq()` and `getStoreSeq()` are used to store and retrieve the sequence number associated with an index, so that we can fetch the changes since this last sequence number.
-
-In order to store the sequence number directly in the index, we use the bleve `SetInternal()` function that allows us to store additional information into the store, without it being taken into account in the index.
-
-The `GetInteral()` function allows us to retrieve this information.
-
 ### Delete
 
-The `DeleteAllIndexesInstance()` function calls `deleteIndex()` on each docType from the instance name passed as argument. It then remove the instance from the `indexes` var and remove all indexes from the disk calling `os.RemoveAll()`. 
+The `indexController.DeleteAllIndexesInstance()` function calls `instanceIndex.DeleteAllIndexes`, that will call `deleteIndex()` on each docType from the instance name passed as argument. 
+It then removes the instance from the `indexController.indexes` var and remove all indexes from the disk calling `os.RemoveAll()`. 
 
-The `DeleteIndexLock()` function locks a mutex and calls `deleteIndex()`.
-
-The `deleteIndex()` function removes the index for a particular instance and doctype. It closes the indexes for all langs and then removes the indexes from the disk. If `querySide` is set to true, it calls `notifyDeleteIndexQuery()` the query side to remove the index. Finally it removes the doctype for this instance in the `indexes` var.
+The `indexController.DeleteIndex()` calls the `instanceIndex.deleteIndex()` function that removes the index for a particular doctype. It closes the indexes for all langs and then removes the indexes from the disk. 
+If `querySide` is set to true, it calls `instanceIndex.notifyDeleteIndexQuery()` the query side to remove the index. Finally it removes the doctype for this instance in the `indexList` var.
 
 The `notifyDeleteIndexQuery()` sends a http POST request to tell the query side to remove a particular index, using the `/fulltext/_delete_index_query/` route.
 
 ## Query
 
-The query functions allows to query the indexes, using an index alias. The code is at [pkg/index/query.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/search/query.go).
+The query functions allows to query the indexes, using an index alias. The code is at [pkg/fulltext/search/query.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/search/query.go).
 
 ### Index Alias
 
@@ -169,11 +200,15 @@ In order to query on multiple indexes, we use an [IndexAlias](http://blevesearch
 
 ### Query Index
 
-To query the IndexAlias, we use a `QueryRequest` object that contains parameters on the query and flags on the desired return fields. Indeed, we can specify how many results we expect, with an optional `offset` and whether or not we want to have the `highlight`, the `name` and the `_rev` of the document as a result. Additionally, it is allowed to add a list of `sort` fields to order the results accordingly.
+To query the IndexAlias, we use a `QueryRequest` object that contains parameters on the query and flags on the desired return fields. Indeed, we can specify how many results we expect, with an optional `offset` and whether or not we want to have the `highlight`, the `name` and the `_rev` of the document as a result. Additionally, it is allowed to add a list of `order` fields to sort the results accordingly.
 
-The `QueryIndex()` function first opens the `IndexAlias` with the corresponding doctypes. It then creates the `bleve.SearchRequest` object with the `BuildQuery()` function. It specifies the desired fields and params based on the `QueryRequest` object and creates Facets on the `created_at` and `docType` fields as an example.
+The `QueryIndex()` function first opens the `IndexAlias` (read-only and non-blocking) with the corresponding doctypes. It then creates the `bleve.SearchRequest` object with the `BuildQuery()` function. It specifies the desired fields and params based on the `QueryRequest` object and creates Facets on the `created_at` and `docType` fields as an example.
 
-Next `QueryIndex()` queries the `IndexAlias` using this `bleve.SearchRequest` to query all the underlying indexes.
+Next `QueryIndex()` queries the `IndexAlias` using the `SearchWithTimeout` function and this `bleve.SearchRequest` to query all the underlying indexes.
+The `SearchWithTimeout` uses the `SearchInContext` method to implement a timeout on search, using a `waitDuration`.
+In the particular case of `IndexAlias`, the search itself will not fail because of the timeout, but the `Status` field from the result stores the success, failures and errors.
+Indeed, the search might be partially successful as some but not all of the indexes might have returned result before the timeout. If there is at least one success, we return its value.
+See [bleve support for timeout/cancel](https://groups.google.com/forum/#!msg/bleve/f7Qnhb9qfoM/S6mUS3HuAwAJ) and [bleve IndexAlias partial results and timeouts](https://groups.google.com/forum/#!msg/bleve/U6MtvUK_sVI/JOc2tsjuAwAJ) for more information.
 
 The results are then formatted into a `SearchResult` object to be returned with the appropriate fields, using the `BuildResults()` function.
 
@@ -184,7 +219,7 @@ In order to make an auto-completion functionality, we allowed to query for a phr
 
 ## Endpoints
 
-For interacting with the indexation and query side, we created different routes at [web/index/index.go](https://github.com/QwantResearch/cozy-stack/blob/Index/web/fulltext/fulltext.go).
+For interacting with the indexation and query side, we created different routes at [web/fulltext/fulltext.go](https://github.com/QwantResearch/cozy-stack/blob/Index/web/fulltext/fulltext.go).
 
 ### Query routes
 
@@ -239,6 +274,8 @@ For interacting with the indexation and query side, we created different routes 
 * the `fulltext/_delete_all_indexes` route behaves the same as `fulltext/_delete_index` but calls the  `DeleteAllIndexesInstance()` function instead.
 * the `fulltext/_delete_index_query/:instance/:doctype/:lang` route is made for the indexation side to tell the query side to delete the corresponding index. It is called after `fulltext/_delete_all_indexes` or `fulltext/_delete_index` if `querySide` is set to `true`.
 * the `fulltext/_post_mapping/:doctype` route allows to send a new doctype mapping description file. The body is written in a tmp file and renamed to the correct description file name once it is entirely written (allowing for an atomic operation).
+* the `fulltext/_remove_mapping` route allows to remove a mapping description file. It requires a `docType` string field. Removing a mapping does not delete the corresponding indexes.
+* the `fulltext/_get_mapping_version` route allows to fetch the mapping version in a particular index. It requires a `docType`, `lang` and `instance` string fields.
 * the `fulltext/_fulltext_option` route allows to set indexing options for an instance. It requires an `instance` string field and allows the following boolean fields : `content` and `highlight` that respectively means to index or not the content, and to store or not the fields to allow for highlight information when querying. For `higlight` to take effect, it requires to call `fulltext/_reindex_all`. Indeed `highlight` implies modifying the mapping, that is done at index initialization. Similarly, for files indexed previously, `content` won't modify the index retroactively, it might be preferable to call `fulltext/_reindex_all` to obtain a coherent index. 
 
 ## Performances
@@ -254,8 +291,6 @@ Moreover, it appeared that the number of fields and the type of fields would cha
 
 ## TODOS
 
-* Consider which solution is better for indexing a file content. Either separating content and metadata in two different indexes or storing the content value in the index and retrieving it if the content has not been modified.
 * Test for performances on the cozy architecture,
 * Test for a good batch size on the cozy architecture,
 * Check that we are resilient in case of machine unavailability,
-* Raise an error while querying or updating after a certain time.
