@@ -18,11 +18,12 @@ type OptionsIndex struct {
 }
 
 const (
-	prefixPath  = "bleve/index/"
-	ContentType = "io.cozy.files.content"
+	prefixPath             = "bleve/index/"
+	ContentType            = "io.cozy.files.content"
+	defaultLanguage        = "en"
+	modelLanguageDetection = "lid.176.ftz" // /!\ If we ever want to modify the model used, we should modify the languagesCountLID (as we can't obtain it dynamically)
+	languagesCountLID      = 176           // Number of available languages for the lid.176.ftz model: https://fasttext.cc/docs/en/crawl-vectors.html
 )
-
-// var indexes map[string]*InstanceIndex
 
 var indexController IndexController
 
@@ -31,7 +32,7 @@ var ft_language *FastText
 func StartIndex(instanceList []*instance.Instance) error {
 
 	ft_language = NewFastTextInst()
-	ft_language.LoadModel("pkg/fulltext/indexation/lid.176.ftz")
+	ft_language.LoadModel("pkg/fulltext/indexation/" + modelLanguageDetection)
 
 	languages := GetAvailableLanguages()
 

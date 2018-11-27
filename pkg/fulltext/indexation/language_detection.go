@@ -19,20 +19,22 @@ func (f *FastText) GetLanguage(sentence string) (string, error) {
 	if f.ft == nil {
 		return "", errors.New("Predict called on closed FastText")
 	}
-	preds, err := f.PredictK(sentence, 176)
+	preds, err := f.PredictK(sentence, languagesCountLID)
 	if err != nil {
 		fmt.Println(err)
 		return "", err
 	}
 
-	for _, lang := range preds {
-		if (lang.Label == "__label__en") || (lang.Label == "__label__fr") {
-			return lang.Label[9:], nil
+	for _, lang_pred := range preds {
+		for _, lang_target := range indexController.GetLanguages() {
+			if lang_pred.Label[9:] == lang_target {
+				return lang_target, nil
+			}
 		}
 	}
 
-	fmt.Println("Error: language not found, en by default")
-	return "en", nil
+	fmt.Println("Error: language not found, defaultLanguage by default")
+	return defaultLanguage, nil
 }
 
 // LoadModel - load FastText model
@@ -70,6 +72,7 @@ func (f *FastText) predict(sentence string) (prob float32, label string, err err
 	cs := C.CString(sentence)
 	fmt.Println(ft)
 	ret := C.fasttext_predict(ft, cs, &cprob, &buf, &size)
+
 	C.free(unsafe.Pointer(cs))
 
 	if ret != 0 {

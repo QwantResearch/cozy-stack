@@ -139,11 +139,13 @@ Additionally, we set the `indexMapping.DefaultAnalyzer` so that if we make a que
 We use a [FastText](https://fasttext.cc) model ([lid.176.ftz](https://fasttext.cc/docs/en/language-identification.html)), to detect the language of a document.
 Using a fasttext-go [wrapper](https://github.com/maudetes/fasttextgo), we can load the model once and then feed it with text to obtain the language prediction (see [pkg/index/language\_detection.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/language\_detection.go)).
 
-For now, we predict the language based on the file name only, however, other fields might also be relevant for language identification. Moreover, in the case of the document being a file, the content should obviously be used to predict the language. 
+For now, we predict the language based on the document name only, except if the document is a file, then we predict on the content.
 
 Since we limit the languages to French and English, we iterate on the predicted languages to stop once we encounter one of these two. Indeed, if the file is actually Spanish, it will still classify it as the most probable language between French and English.
 
 The language detection doesn't necessarily returns all languages as prediction, and in particular it sometimes happens to return neither "fr" nor "en". By default, we return "en" in this case.
+
+If we modify the model used (the `modelLanguageDetection` var), we should also update the `languagesCountLID` var that is the number of available languages label in the model. 
 
 ### IndexWrapper and underlying store
 

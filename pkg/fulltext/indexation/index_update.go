@@ -122,7 +122,7 @@ func (indexUpdater *IndexUpdater) UpdateIndex() error {
 func (indexUpdater *IndexUpdater) getResults() (*couchdb.ChangesResponse, error) {
 
 	// Set request to get last changes
-	last_store_seq, err := indexUpdater.batchIndex[indexController.GetLanguages()[0]].index.getStoreSeq()
+	last_store_seq, err := indexUpdater.batchIndex[defaultLanguage].index.getStoreSeq()
 	if err != nil {
 		fmt.Printf("Error on GetStoredSeq: %s\n", err)
 		return nil, err
