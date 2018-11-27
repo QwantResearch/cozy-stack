@@ -381,7 +381,7 @@ func DeleteIndex(c echo.Context) error {
 		querySide = body["querySide"].(bool)
 	}
 
-	err := indexation.DeleteIndexLock(instance, docType, querySide)
+	err := indexation.DeleteIndex(instance, docType, querySide)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
@@ -593,7 +593,6 @@ func FulltextOption(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, options)
-
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
