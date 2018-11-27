@@ -1,20 +1,13 @@
 package indexation
 
 import (
-	// "bytes"
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
-	// "net/http"
 	"os"
 	"sync"
-	// "time"
 
-	// "github.com/blevesearch/bleve"
-	// "github.com/cozy/cozy-stack/client/request"
-	// "github.com/cozy/cozy-stack/pkg/consts"
-	// "github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
