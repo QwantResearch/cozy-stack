@@ -6,6 +6,7 @@ import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"os"
+	"path"
 	"sync"
 
 	"github.com/cozy/cozy-stack/pkg/instance"
@@ -115,7 +116,7 @@ func (indexController *IndexController) checkInstance(instName string) error {
 func (indexController *IndexController) GetOptionsInstance(instName string) (OptionsIndex, error) {
 	options := OptionsIndex{false, false}
 
-	data, err := ioutil.ReadFile(prefixPath + instName + "/config.yml")
+	data, err := ioutil.ReadFile(path.Join(prefixPath, instName, "config.yml"))
 	if err != nil {
 		// We return default
 		return options, nil
@@ -276,7 +277,7 @@ func (indexController *IndexController) DeleteAllIndexesInstance(instName string
 	}
 
 	delete(indexController.indexes, instName)
-	return os.RemoveAll(prefixPath + instName)
+	return os.RemoveAll(path.Join(prefixPath, instName))
 }
 
 func (indexController *IndexController) DeleteIndex(instName string, docType string, querySide bool) error {

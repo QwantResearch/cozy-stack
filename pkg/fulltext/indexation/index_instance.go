@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
 	"sync"
 
 	"github.com/blevesearch/bleve"
@@ -174,13 +175,13 @@ func (instanceIndex *InstanceIndex) WriteOptionsInstance(options OptionsIndex) e
 		return err
 	}
 
-	err = os.MkdirAll(prefixPath+instanceIndex.getInstanceName(), 0777)
+	err = os.MkdirAll(path.Join(prefixPath, instanceIndex.getInstanceName()), 0777)
 	if err != nil {
 		fmt.Printf("Error on mkdirall", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(prefixPath+instanceIndex.getInstanceName()+"/config.yml", data2, 0666)
+	err = ioutil.WriteFile(path.Join(prefixPath, instanceIndex.getInstanceName(), "config.yml"), data2, 0666)
 	if err != nil {
 		fmt.Printf("Error on write file: %s\n", err)
 		return err
@@ -438,5 +439,5 @@ func (instanceIndex *InstanceIndex) sendIndexToQuery(docType, lang string) error
 }
 
 func (instanceIndex *InstanceIndex) getPathIndex(docType, lang string) string {
-	return prefixPath + instanceIndex.getInstanceName() + "/" + lang + "/" + docType
+	return path.Join(prefixPath, instanceIndex.getInstanceName(), lang, docType)
 }

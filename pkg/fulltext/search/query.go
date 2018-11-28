@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"time"
 
 	"github.com/blevesearch/bleve"
@@ -50,17 +51,17 @@ func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []
 
 	for _, lang := range languages {
 		for _, docType := range docTypeList {
-			path := SearchPrefixPath + instName + "/" + lang + "/" + docType
-			index, err := bleve.OpenUsing(path, map[string]interface{}{
+			indexPath := path.Join(SearchPrefixPath, instName, lang, docType)
+			index, err := bleve.OpenUsing(indexPath, map[string]interface{}{
 				"read_only": true,
 			})
 			if err == bleve.ErrorIndexMetaMissing {
-				err2 := CreateMetaIndexJson(path)
+				err2 := CreateMetaIndexJson(indexPath)
 				if err2 != nil {
 					fmt.Printf("Error on CreateMetaIndexJson: %s\n", err2)
 					return nil, nil, err2
 				}
-				index, err2 = bleve.OpenUsing(path, map[string]interface{}{
+				index, err2 = bleve.OpenUsing(indexPath, map[string]interface{}{
 					"read_only": true,
 				})
 				if err2 != nil {
@@ -239,8 +240,8 @@ func BuildResults(request QueryRequest, searchResults *bleve.SearchResult) []Sea
 	return fetched
 }
 
-func CreateMetaIndexJson(path string) error {
-	f, err := os.OpenFile(path+"/index_meta.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+func CreateMetaIndexJson(indexPath string) error {
+	f, err := os.OpenFile(path.Join(indexPath, "/index_meta.json"), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		fmt.Println(err)
 		return err

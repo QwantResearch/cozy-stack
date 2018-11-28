@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/web/jsonapi"
@@ -235,9 +236,9 @@ func ReplicateIndexToQuery(c echo.Context) error {
 	lang := c.Param("lang")
 	instName := c.Param("instance")
 
-	path := search.SearchPrefixPath + instName + "/" + lang + "/" + docType
+	indexPath := path.Join(search.SearchPrefixPath, instName, lang, docType)
 
-	err := os.MkdirAll(path, 0700)
+	err := os.MkdirAll(indexPath, 0700)
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -245,7 +246,7 @@ func ReplicateIndexToQuery(c echo.Context) error {
 		})
 	}
 
-	tmpFile, err := ioutil.TempFile(path, "store.tmp.")
+	tmpFile, err := ioutil.TempFile(indexPath, "store.tmp.")
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -269,7 +270,7 @@ func ReplicateIndexToQuery(c echo.Context) error {
 		})
 	}
 
-	err = os.Rename(tmpFile.Name(), path+"/store")
+	err = os.Rename(tmpFile.Name(), path.Join(indexPath, "store"))
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -432,9 +433,9 @@ func DeleteIndexQuery(c echo.Context) error {
 	lang := c.Param("lang")
 	instName := c.Param("instance")
 
-	path := search.SearchPrefixPath + instName + "/" + lang + "/" + docType
+	indexPath := path.Join(search.SearchPrefixPath, instName, lang, docType)
 
-	err := os.RemoveAll(path)
+	err := os.RemoveAll(indexPath)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
@@ -472,7 +473,7 @@ func PostMapping(c echo.Context) error {
 		})
 	}
 
-	err = os.Rename(tmpFile.Name(), indexation.MappingDescriptionPath+docType+".json")
+	err = os.Rename(tmpFile.Name(), path.Join(indexation.MappingDescriptionPath, docType+".json"))
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -502,7 +503,7 @@ func RemoveMapping(c echo.Context) error {
 		})
 	}
 
-	err := os.Remove(indexation.MappingDescriptionPath + docType + ".json")
+	err := os.Remove(path.Join(indexation.MappingDescriptionPath, docType+".json"))
 	if err != nil {
 		fmt.Println(err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{
