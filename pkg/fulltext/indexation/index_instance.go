@@ -22,6 +22,7 @@ type InstanceIndex struct {
 	indexMu        *sync.Mutex
 	indexHighlight bool
 	indexContent   bool
+	languages      []string
 	instName       string
 }
 
@@ -32,8 +33,8 @@ func (instanceIndex *InstanceIndex) initializeIndexDocType(docType string) error
 
 	var err error
 	var created bool
-	instanceIndex.indexList[docType] = make(map[string]*IndexWrapper, len(indexController.GetLanguages()))
-	for _, lang := range indexController.GetLanguages() {
+	instanceIndex.indexList[docType] = make(map[string]*IndexWrapper, len(instanceIndex.getLanguages()))
+	for _, lang := range instanceIndex.getLanguages() {
 		instanceIndex.indexList[docType][lang], created, err = instanceIndex.getIndex(docType, lang)
 		if err != nil {
 			// It failed, we remove the erroneous doctype
@@ -126,14 +127,12 @@ func (instanceIndex *InstanceIndex) getDocTypeList() []string {
 	return docTypeList
 }
 
-func (instanceIndex *InstanceIndex) getDocTypeLangList(docType string) []string {
-	langList := make([]string, len(instanceIndex.indexList[docType]))
-	i := 0
-	for lang := range instanceIndex.indexList[docType] {
-		langList[i] = lang
-		i++
-	}
-	return langList
+func (instanceIndex *InstanceIndex) getLanguages() []string {
+	return instanceIndex.languages
+}
+
+func (instanceIndex *InstanceIndex) setLanguages(languages []string) {
+	instanceIndex.languages = languages
 }
 
 func (instanceIndex *InstanceIndex) getIndexDocTypeLang(docType string, lang string) *IndexWrapper {
@@ -168,7 +167,7 @@ func (instanceIndex *InstanceIndex) getInstanceName() string {
 	return instanceIndex.instName
 }
 
-func (instanceIndex *InstanceIndex) WriteOptionsInstance(options OptionsIndex) error {
+func (instanceIndex *InstanceIndex) WriteOptionsInstance(options *OptionsIndex) error {
 	data2, err := yaml.Marshal(options)
 	if err != nil {
 		fmt.Printf("Error on marshal yaml", err)
@@ -190,25 +189,18 @@ func (instanceIndex *InstanceIndex) WriteOptionsInstance(options OptionsIndex) e
 	return nil
 }
 
-func (instanceIndex *InstanceIndex) SetOptionsInstance(options map[string]bool) (map[string]bool, error) {
+func (instanceIndex *InstanceIndex) SetOptionsInstance(options *OptionsIndex) (*OptionsIndex, error) {
 
-	if content, ok := options["content"]; ok {
-		instanceIndex.setContent(content)
-	}
+	instanceIndex.setContent(options.Content)
+	instanceIndex.setHighlight(options.Highlight)
+	instanceIndex.setLanguages(options.Languages)
 
-	if highlight, ok := options["highlight"]; ok {
-		instanceIndex.setHighlight(highlight)
-	}
-
-	err := instanceIndex.WriteOptionsInstance(OptionsIndex{instanceIndex.getHighlight(), instanceIndex.getContent()})
+	err := instanceIndex.WriteOptionsInstance(options)
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]bool{
-		"content":  instanceIndex.getContent(),
-		"higlight": instanceIndex.getHighlight(),
-	}, nil
+	return options, nil
 }
 
 func (instanceIndex *InstanceIndex) GetMappingVersion(docType string, lang string) (string, error) {
@@ -242,7 +234,7 @@ func (instanceIndex *InstanceIndex) ReIndex(docType string) error {
 
 func (instanceIndex *InstanceIndex) ReplicateAll() error {
 	for _, docType := range instanceIndex.getDocTypeList() {
-		for _, lang := range instanceIndex.getDocTypeLangList(docType) {
+		for _, lang := range instanceIndex.getLanguages() {
 			_, err := instanceIndex.Replicate(docType, lang)
 			if err != nil {
 				fmt.Printf("Error on replication: %s\n", err)
@@ -309,7 +301,7 @@ func (instanceIndex *InstanceIndex) DeleteAllIndexes(querySide bool) error {
 
 func (instanceIndex *InstanceIndex) deleteIndex(docType string, querySide bool) error {
 
-	for _, lang := range instanceIndex.getDocTypeLangList(docType) {
+	for _, lang := range instanceIndex.getLanguages() {
 		if instanceIndex.getIndexDocTypeLang(docType, lang) != nil {
 			(*instanceIndex.getIndexDocTypeLang(docType, lang)).Close()
 		}
@@ -363,6 +355,34 @@ func (instanceIndex *InstanceIndex) notifyDeleteIndexQuery(docType string, lang 
 	return nil
 }
 
+func (instanceIndex *InstanceIndex) notifyDeleteInstanceQuery() error {
+
+	inst, err := instance.Get(instanceIndex.getInstanceName())
+	if err != nil {
+		fmt.Printf("Error on getting instance from instance name: %s\n", err)
+		return err
+	}
+
+	opts := &request.Options{
+		Method:  http.MethodPost,
+		Scheme:  inst.Scheme(),
+		Domain:  inst.DomainName(),
+		Path:    "/fulltext/_delete_instance_query/" + instanceIndex.getInstanceName(),
+		Headers: request.Headers{
+			// Deal with permissions
+		},
+		Body: nil,
+	}
+	_, err = request.Req(opts)
+	if err != nil {
+		fmt.Println("Error on POST request")
+		fmt.Println(err)
+		return err
+	}
+
+	return nil
+}
+
 func (instanceIndex *InstanceIndex) makeSureInstanceDocTypeReady(docType string) error {
 
 	err := instanceIndex.checkInstanceDocType(docType)
@@ -385,14 +405,10 @@ func (instanceIndex *InstanceIndex) checkInstanceDocType(docType string) error {
 }
 
 func (instanceIndex *InstanceIndex) checkInstanceDocTypeLang(docType string, lang string) error {
-	languages := instanceIndex.getDocTypeLangList(docType)
-
-	for _, l := range languages {
-		if l == lang {
-			return nil
-		}
+	if _, ok := instanceIndex.indexList[docType][lang]; !ok {
+		return errors.New("Language not found in checkInstanceDocTypeLang")
 	}
-	return errors.New("Language not found in checkInstanceDocTypeLang")
+	return nil
 }
 
 func (instanceIndex *InstanceIndex) sendIndexToQuery(docType, lang string) error {

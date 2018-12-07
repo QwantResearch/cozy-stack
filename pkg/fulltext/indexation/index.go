@@ -6,11 +6,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/instance"
 )
 
-type OptionsIndex struct {
-	Highlight bool `yaml:highlight`
-	Content   bool `yaml:content`
-}
-
 const (
 	prefixPath             = "bleve/index/"
 	ContentType            = "io.cozy.files.content"
@@ -28,9 +23,7 @@ func StartIndex(instanceList []*instance.Instance) error {
 	ft_language = NewFastTextInst()
 	ft_language.LoadModel("pkg/fulltext/indexation/" + modelLanguageDetection)
 
-	languages := GetAvailableLanguages()
-
-	err := indexController.Init(instanceList, languages)
+	err := indexController.Init(instanceList)
 	if err != nil {
 		fmt.Printf("Error on init indexController: %s\n", err)
 		return err
@@ -78,6 +71,6 @@ func GetMappingVersion(instName, docType, lang string) (string, error) {
 	return indexController.GetMappingVersion(instName, docType, lang)
 }
 
-func SetOptionsInstance(instName string, options map[string]bool) (map[string]bool, error) {
+func SetOptionsInstance(instName string, options map[string]interface{}) (*OptionsIndex, error) {
 	return indexController.SetOptionsInstance(instName, options)
 }

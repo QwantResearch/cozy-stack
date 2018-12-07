@@ -13,17 +13,20 @@ import (
 )
 
 type IndexController struct {
-	indexes   map[string]*InstanceIndex
-	languages []string
+	indexes map[string]*InstanceIndex
+}
+
+type OptionsIndex struct {
+	Highlight bool     `yaml:"highlight" json:"highlight"`
+	Content   bool     `yaml:"content" json:"content"`
+	Languages []string `yaml:"languages" json:"languages"`
 }
 
 // The indexController is the interface to use to manipulate the indexes.
 // It is responsible for checking/creating the appropriate instanceIndexes
 // and assuring mutual exclusion when necessary for functions underneath.
 
-func (indexController *IndexController) Init(instanceList []*instance.Instance, languages []string) error {
-	indexController.setLanguages(languages)
-
+func (indexController *IndexController) Init(instanceList []*instance.Instance) error {
 	indexController.indexes = make(map[string]*InstanceIndex)
 	for _, inst := range instanceList {
 		err := indexController.initializeIndexes(inst.DomainName())
@@ -44,6 +47,7 @@ func (indexController *IndexController) initializeIndexes(instName string) error
 		new(sync.Mutex),
 		options.Highlight,
 		options.Content,
+		options.Languages,
 		instName,
 	}
 
@@ -59,6 +63,11 @@ func (indexController *IndexController) initializeIndexes(instName string) error
 
 	instanceIndex.lockInstance()
 	defer instanceIndex.unlockInstance()
+
+	err = instanceIndex.WriteOptionsInstance(options)
+	if err != nil {
+		return err
+	}
 
 	for _, docType := range docTypeList {
 		err = instanceIndex.initializeIndexDocType(docType)
@@ -86,14 +95,6 @@ func (indexController *IndexController) getInstanceIndex(instName string, force 
 	return indexController.indexes[instName], nil
 }
 
-func (indexController *IndexController) GetLanguages() []string {
-	return indexController.languages
-}
-
-func (indexController *IndexController) setLanguages(languages []string) {
-	indexController.languages = languages
-}
-
 func (indexController *IndexController) makeSureInstanceReady(instName string) error {
 	err := indexController.checkInstance(instName)
 	if err != nil {
@@ -113,24 +114,24 @@ func (indexController *IndexController) checkInstance(instName string) error {
 	return nil
 }
 
-func (indexController *IndexController) GetOptionsInstance(instName string) (OptionsIndex, error) {
-	options := OptionsIndex{false, false}
+func (indexController *IndexController) GetOptionsInstance(instName string) (*OptionsIndex, error) {
+	options := &OptionsIndex{false, false, []string{defaultLanguage}}
 
 	data, err := ioutil.ReadFile(path.Join(prefixPath, instName, "config.yml"))
 	if err != nil {
-		// We return default
+		// We return default options
 		return options, nil
 	}
 
 	err = yaml.Unmarshal([]byte(data), &options)
 	if err != nil {
-		return options, err
+		return nil, err
 	}
 
 	return options, nil
 }
 
-func (indexController *IndexController) SetOptionsInstance(instName string, options map[string]bool) (map[string]bool, error) {
+func (indexController *IndexController) SetOptionsInstance(instName string, options map[string]interface{}) (*OptionsIndex, error) {
 
 	instanceIndex, err := indexController.getInstanceIndex(instName, true)
 	if err != nil {
@@ -140,7 +141,27 @@ func (indexController *IndexController) SetOptionsInstance(instName string, opti
 	instanceIndex.lockInstance()
 	defer instanceIndex.unlockInstance()
 
-	return instanceIndex.SetOptionsInstance(options)
+	prevOptions, err := indexController.GetOptionsInstance(instName)
+	if err != nil {
+		return nil, err
+	}
+
+	if content, ok := options["content"]; ok {
+		prevOptions.Content = content.(bool)
+	}
+
+	if highlight, ok := options["highlight"]; ok {
+		prevOptions.Highlight = highlight.(bool)
+	}
+
+	if languages, ok := options["languages"]; ok {
+		if len(languages.([]string)) == 0 {
+			return nil, errors.New("languages can't be empty")
+		}
+		prevOptions.Languages = languages.([]string)
+	}
+
+	return instanceIndex.SetOptionsInstance(prevOptions)
 }
 
 func (indexController *IndexController) GetMappingVersion(instName, docType, lang string) (string, error) {
@@ -311,7 +332,7 @@ func (indexController *IndexController) SendIndexToQuery(instName string, docTyp
 		return err
 	}
 
-	for _, lang := range indexController.GetLanguages() {
+	for _, lang := range instanceIndex.getLanguages() {
 		err := instanceIndex.sendIndexToQuery(docType, lang)
 		if err != nil {
 			return err
@@ -336,9 +357,13 @@ func (indexController *IndexController) UpdateIndex(instName string, docType str
 		return err
 	}
 
+	if len(instanceIndex.getLanguages()) == 0 {
+		return errors.New("Error on UpdateIndex: No language found for this instance")
+	}
+
 	var indexUpdater IndexUpdater
 
-	indexUpdater.init(instanceIndex, docType)
+	indexUpdater.Init(instanceIndex, docType)
 
 	return indexUpdater.UpdateIndex()
 }

@@ -10,8 +10,9 @@ import (
 
 	"github.com/blevesearch/bleve"
 	"github.com/blevesearch/bleve/analysis/analyzer/keyword"
-	"github.com/blevesearch/bleve/analysis/lang/en"
-	"github.com/blevesearch/bleve/analysis/lang/fr"
+	_ "github.com/blevesearch/bleve/analysis/lang/en"
+	_ "github.com/blevesearch/bleve/analysis/lang/fr"
+	// import all lang analyzers that might be used
 	"github.com/blevesearch/bleve/mapping"
 	// "github.com/blevesearch/bleve/analysis/analyzer/simple" // Might be useful to check for other Analyzers (maybe make one ourselves)
 )
@@ -19,12 +20,6 @@ import (
 const (
 	MappingDescriptionPath = "bleve/mapping_description/"
 )
-
-func GetAvailableLanguages() []string {
-	return []string{fr.AnalyzerName, en.AnalyzerName}
-
-	//TODO: store language in mapping description? (per doctype?)
-}
 
 func AddTypeMapping(indexMapping *mapping.IndexMappingImpl, docType string, lang string, highlight bool) error {
 

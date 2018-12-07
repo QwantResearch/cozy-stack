@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path"
 	"time"
@@ -43,7 +44,10 @@ func OpenIndexAlias(instName string, docTypeList []string) (bleve.IndexAlias, []
 	}
 
 	// Deal with languages and docTypes dynamically instead
-	languages := []string{"fr", "en"}
+	languages, err := GetLanguageInstance(instName)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var indexes []*bleve.Index
 
@@ -253,4 +257,20 @@ func CreateMetaIndexJson(indexPath string) error {
 	}
 
 	return f.Close()
+}
+
+func GetLanguageInstance(instName string) ([]string, error) {
+	dirs, err := ioutil.ReadDir(path.Join(SearchPrefixPath, instName))
+	if err != nil {
+		return nil, err
+	}
+
+	languages := []string{}
+
+	for _, dir := range dirs {
+		if dir.IsDir() {
+			languages = append(languages, dir.Name())
+		}
+	}
+	return languages, nil
 }

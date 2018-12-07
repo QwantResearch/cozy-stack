@@ -12,9 +12,10 @@ import (
 var batchSize = 300
 
 type IndexUpdater struct {
-	instanceIndex     *InstanceIndex
+	instanceName      string
 	docType           string
 	content           bool
+	languages         []string
 	batchIndex        map[string]*BatchIndex
 	batchIndexContent map[string]*BatchIndex
 }
@@ -25,17 +26,18 @@ type BatchIndex struct {
 	count int
 }
 
-func (indexUpdater *IndexUpdater) init(instanceIndex *InstanceIndex, docType string) {
+func (indexUpdater *IndexUpdater) Init(instanceIndex *InstanceIndex, docType string) {
 
-	indexUpdater.instanceIndex = instanceIndex
+	indexUpdater.instanceName = instanceIndex.getInstanceName()
 	indexUpdater.docType = docType
 	indexUpdater.content = instanceIndex.indexContent && docType == consts.Files
+	indexUpdater.languages = instanceIndex.getLanguages()
 
 	indexUpdater.batchIndex = make(map[string]*BatchIndex)
 
-	for _, lang := range indexController.GetLanguages() {
+	for _, lang := range indexUpdater.languages {
 		indexUpdater.batchIndex[lang] = &BatchIndex{}
-		indexUpdater.batchIndex[lang].index = indexUpdater.instanceIndex.getIndexDocTypeLang(docType, lang)
+		indexUpdater.batchIndex[lang].index = instanceIndex.getIndexDocTypeLang(docType, lang)
 		indexUpdater.batchIndex[lang].batch = (indexUpdater.batchIndex[lang].index).NewBatch()
 		indexUpdater.batchIndex[lang].count = 0
 	}
@@ -43,9 +45,9 @@ func (indexUpdater *IndexUpdater) init(instanceIndex *InstanceIndex, docType str
 	if indexUpdater.content {
 		indexUpdater.batchIndexContent = make(map[string]*BatchIndex)
 
-		for _, lang := range indexController.GetLanguages() {
+		for _, lang := range indexUpdater.languages {
 			indexUpdater.batchIndexContent[lang] = &BatchIndex{}
-			indexUpdater.batchIndexContent[lang].index = indexUpdater.instanceIndex.getIndexDocTypeLang(ContentType, lang)
+			indexUpdater.batchIndexContent[lang].index = instanceIndex.getIndexDocTypeLang(ContentType, lang)
 			indexUpdater.batchIndexContent[lang].batch = (indexUpdater.batchIndexContent[lang].index).NewBatch()
 			indexUpdater.batchIndexContent[lang].count = 0
 		}
@@ -100,7 +102,7 @@ func (indexUpdater *IndexUpdater) UpdateIndex() error {
 
 	}
 
-	for _, lang := range indexController.GetLanguages() {
+	for _, lang := range indexUpdater.languages {
 
 		indexUpdater.batchIndex[lang].Close()
 
@@ -122,7 +124,7 @@ func (indexUpdater *IndexUpdater) UpdateIndex() error {
 func (indexUpdater *IndexUpdater) getResults() (*couchdb.ChangesResponse, error) {
 
 	// Set request to get last changes
-	last_store_seq, err := indexUpdater.batchIndex[defaultLanguage].index.getStoreSeq()
+	last_store_seq, err := indexUpdater.batchIndex[indexUpdater.languages[0]].index.getStoreSeq()
 	if err != nil {
 		fmt.Printf("Error on GetStoredSeq: %s\n", err)
 		return nil, err
@@ -134,7 +136,7 @@ func (indexUpdater *IndexUpdater) getResults() (*couchdb.ChangesResponse, error)
 		IncludeDocs: true,
 	}
 
-	inst, err := instance.Get(indexUpdater.instanceIndex.getInstanceName())
+	inst, err := instance.Get(indexUpdater.instanceName)
 	if err != nil {
 		fmt.Printf("Error on getting instance from instance name: %s\n", err)
 		return nil, err
@@ -157,13 +159,13 @@ func (indexUpdater *IndexUpdater) CreateDoc(result couchdb.Change) error {
 
 	// If doc is a file and indexContent is true, we need to index content
 	if indexUpdater.content {
-		content, err := getContentFile(indexUpdater.instanceIndex.getInstanceName(), result.DocID)
+		content, err := getContentFile(indexUpdater.instanceName, result.DocID)
 		if err != nil {
 			fmt.Printf("Error on getContentFile", err)
 			return err
 		}
 
-		pred, err = ft_language.GetLanguage(content)
+		pred, err = ft_language.GetLanguage(content, indexUpdater.languages)
 		if err != nil {
 			fmt.Printf("Error on language prediction:  %s\n", err)
 			return err
@@ -181,7 +183,7 @@ func (indexUpdater *IndexUpdater) CreateDoc(result couchdb.Change) error {
 			return err
 		}
 	} else {
-		pred, err = ft_language.GetLanguage(result.Doc.M["name"].(string))
+		pred, err = ft_language.GetLanguage(result.Doc.M["name"].(string), indexUpdater.languages)
 		if err != nil {
 			fmt.Printf("Error on language prediction:  %s\n", err)
 			return err
@@ -205,7 +207,7 @@ func (indexUpdater *IndexUpdater) UpdateDoc(originalIndexLang string, result cou
 		}
 		if md5sum != result.Doc.M["md5sum"] {
 			// Get new content and index it
-			content, err := getContentFile(indexUpdater.instanceIndex.getInstanceName(), result.DocID)
+			content, err := getContentFile(indexUpdater.instanceName, result.DocID)
 			if err != nil {
 				fmt.Printf("Error on getContentFile: %s\n", err)
 				return err

@@ -43,7 +43,7 @@ The `indexController` is the interface with the indexes for any index manipulati
 It is responsible for making the appropriate checks before trying any manipulation and locking or unlocking a mutex if needed.
 The following functions all lock the mutex: `indexController.UpdateIndex()`, `indexController.DeleteIndex()`, `indexController.DeleteAllIndexesInstance()`, `indexController.Replicate()`, `indexController.ReplicateAll()`, `indexController.ReIndex()`, `indexController.ReIndexAll()`, `indexController.initializeIndexes()`. 
  
-The `indexController.init()` calls `indexController.initializeIndexes()` for each instance. This function sets the options returned by `indexController.GetOptionsInstance()` and allocates the right `InstanceIndex` object and initializes it, calling `instanceIndex.initializeIndexDocType()` on each doctype.
+The `indexController.Init()` calls `indexController.initializeIndexes()` for each instance. This function sets the options returned by `indexController.GetOptionsInstance()` (reading from a `config.yml` file if found else using default) and allocates the right `InstanceIndex` object. It then tells it to write the options to the file and initializes its indexes, calling `instanceIndex.initializeIndexDocType()` on each doctype.
 
 ### IndexInstance
 
@@ -54,6 +54,7 @@ The `InstanceIndex` object contains :
 - an `indexMu` that is a mutex protecting this instance,
 - an `indexHighlight` that is a boolean. If set to true, we will store fields to allow for highlight when querying,
 - an `indexContent` that is a boolean. If set to true, we will index content associated with a file,
+- a `languages` list of strings. It contains the list of languages to deal with for this instance,
 - an `instName` that is a string to easily access the instance name.
 
 The `instanceIndex.initializeIndexDocType()` creates the `indexList` and allocates the mapping between `docType`, `lang` and `IndexWrapper`. It will then call `instanceIndex.getIndex()` for each.

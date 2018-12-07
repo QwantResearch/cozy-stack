@@ -15,7 +15,7 @@ import (
 	"unsafe"
 )
 
-func (f *FastText) GetLanguage(sentence string) (string, error) {
+func (f *FastText) GetLanguage(sentence string, targetLangs []string) (string, error) {
 	if f.ft == nil {
 		return "", errors.New("Predict called on closed FastText")
 	}
@@ -26,7 +26,7 @@ func (f *FastText) GetLanguage(sentence string) (string, error) {
 	}
 
 	for _, lang_pred := range preds {
-		for _, lang_target := range indexController.GetLanguages() {
+		for _, lang_target := range targetLangs {
 			if lang_pred.Label[9:] == lang_target {
 				return lang_target, nil
 			}

@@ -571,6 +571,7 @@ func FulltextOption(c echo.Context) error {
 
 	var instance string
 	var ok bool
+	options := map[string]interface{}{}
 
 	if instance, ok = body["instance"].(string); !ok {
 		return c.JSON(http.StatusBadRequest, echo.Map{
@@ -586,14 +587,26 @@ func FulltextOption(c echo.Context) error {
 		options["highlight"] = highlight
 	}
 
-	options, err := indexation.SetOptionsInstance(instance, options)
+	if languages, ok := body["languages"].([]interface{}); ok {
+		languageList := make([]string, len(languages))
+		for i, l := range languages {
+			if languageList[i], ok = l.(string); !ok {
+				return c.JSON(http.StatusBadRequest, echo.Map{
+					"error": errors.New("languages field should be list of strings.").Error(),
+				})
+			}
+		}
+		options["languages"] = languageList
+	}
+
+	newOptions, err := indexation.SetOptionsInstance(instance, options)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err.Error(),
 		})
 	}
 
-	return c.JSON(http.StatusOK, options)
+	return c.JSON(http.StatusOK, newOptions)
 }
 
 func MakeRequest(mapJSONRequest map[string]interface{}) search.QueryRequest {
