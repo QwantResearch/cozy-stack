@@ -32,6 +32,7 @@ func Routes(router *echo.Group) {
 	router.POST("/_delete_index", DeleteIndex)
 	router.POST("/_delete_all_indexes", DeleteAllIndexes)
 	router.POST("/_delete_index_query/:instance/:doctype/:lang", DeleteIndexQuery)
+	router.POST("/_delete_instance_query/:instance", DeleteInstanceQuery)
 	router.POST("/_post_mapping/:doctype", PostMapping)
 	router.POST("/_remove_mapping", RemoveMapping)
 	router.POST("/_get_mapping_version", GetMappingVersion)
@@ -185,7 +186,6 @@ func UpdateAllIndexes(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, nil)
-
 }
 
 func UpdateIndex(c echo.Context) error {
@@ -445,6 +445,22 @@ func DeleteIndexQuery(c echo.Context) error {
 	return c.JSON(http.StatusOK, nil)
 }
 
+func DeleteInstanceQuery(c echo.Context) error {
+
+	instName := c.Param("instance")
+
+	indexPath := path.Join(search.SearchPrefixPath, instName)
+
+	err := os.RemoveAll(indexPath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, nil)
+}
+
 func PostMapping(c echo.Context) error {
 
 	docType := c.Param("doctype")
@@ -567,7 +583,6 @@ func FulltextOption(c echo.Context) error {
 			"error": errors.New("Could not decode the request").Error(),
 		})
 	}
-	options := make(map[string]bool)
 
 	var instance string
 	var ok bool

@@ -287,6 +287,14 @@ func (instanceIndex *InstanceIndex) Replicate(docType string, lang string) (stri
 
 func (instanceIndex *InstanceIndex) DeleteAllIndexes(querySide bool) error {
 
+	if querySide {
+		err := instanceIndex.notifyDeleteInstanceQuery()
+		if err != nil {
+			fmt.Printf("Error telling query to delete indexInstance: %s\n", err)
+			return err
+		}
+	}
+
 	for _, docType := range instanceIndex.getDocTypeList() {
 		if docType == ContentType {
 			continue
