@@ -24,6 +24,13 @@ In this module, we do not extract text from file, which means that another modul
 
 To quickly get started, we focused on three doctypes: photo albums, files and bank accounts. We also considered two languages of indexation: French and English.
 
+## Requirements
+
+The fulltext package requires features that are not yet available in bleve ([1st Pull Request](https://github.com/blevesearch/bleve/pull/1072) and [2nd Pull Request](https://github.com/blevesearch/bleve/pull/858)).
+A fork that implements those features can be found at [https://github.com/QwantResearch/bleve/tree/Index](https://github.com/QwantResearch/bleve/tree/Index).
+
+Additionally, the fulltext package makes use of a fasttext go wrapper. The lib is available in the repo, but the source is available [here](https://github.com/QwantResearch/fasttextgo).
+
 ## Indexation
 
 The indexation code is at [pkg/fulltext/indexation/index.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/index.go).
@@ -41,9 +48,9 @@ The indexController code is at [pkg/fulltext/indexation/index_controller.go](htt
 
 The `indexController` is the interface with the indexes for any index manipulation: initiate, delete, update, replicate, reindex, ...
 It is responsible for making the appropriate checks before trying any manipulation and locking or unlocking a mutex if needed.
-The following functions all lock the mutex: `indexController.UpdateIndex()`, `indexController.DeleteIndex()`, `indexController.DeleteAllIndexesInstance()`, `indexController.Replicate()`, `indexController.ReplicateAll()`, `indexController.ReIndex()`, `indexController.ReIndexAll()`, `indexController.initializeIndexes()`. 
+The following methods all lock the mutex: `indexController.UpdateIndex()`, `indexController.DeleteIndex()`, `indexController.DeleteAllIndexesInstance()`, `indexController.Replicate()`, `indexController.ReplicateAll()`, `indexController.ReIndex()`, `indexController.ReIndexAll()`, `indexController.initializeIndexes()`. 
  
-The `indexController.Init()` calls `indexController.initializeIndexes()` for each instance. This function sets the options returned by `indexController.GetOptionsInstance()` (reading from a `config.yml` file if found else using default) and allocates the right `InstanceIndex` object. It then tells it to write the options to the file and initializes its indexes, calling `instanceIndex.initializeIndexDocType()` on each doctype.
+The `indexController.Init()` calls `indexController.initializeIndexes()` for each instance. This method sets the options returned by `indexController.GetOptionsInstance()` (reading from a `config.yml` file if found else using default) and allocates the right `InstanceIndex` object. It then tells it to write the options to the file and initializes its indexes, calling `instanceIndex.initializeIndexDocType()` on each doctype.
 
 ### IndexInstance
 
@@ -58,7 +65,7 @@ The `InstanceIndex` object contains :
 - an `instName` that is a string to easily access the instance name.
 
 The `instanceIndex.initializeIndexDocType()` creates the `indexList` and allocates the mapping between `docType`, `lang` and `IndexWrapper`. It will then call `instanceIndex.getIndex()` for each.
-The `instanceIndex.getIndex()` function either fetches the index from the disk or creates it if not found. In the second case, it sets their mapping, stores the mapping version and stores their couchdb sequence number to 0 (the default). No indexation is made at this stage however.
+The `instanceIndex.getIndex()` method either fetches the index from the disk or creates it if not found. In the second case, it sets their mapping, stores the mapping version and stores their couchdb sequence number to 0 (the default). No indexation is made at this stage however.
 We now have one index per instance, per doctype (3 in our examples) and per language that are initialized.
 
 ### Workers and Jobs
@@ -138,7 +145,7 @@ Additionally, we set the `indexMapping.DefaultAnalyzer` so that if we make a que
 ### Language Detection
 
 We use a [FastText](https://fasttext.cc) model ([lid.176.ftz](https://fasttext.cc/docs/en/language-identification.html)), to detect the language of a document.
-Using a fasttext-go [wrapper](https://github.com/maudetes/fasttextgo), we can load the model once and then feed it with text to obtain the language prediction (see [pkg/index/language\_detection.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/language\_detection.go)).
+Using a fasttext-go [wrapper](https://github.com/QwantResearch/fasttextgo), we can load the model once and then feed it with text to obtain the language prediction (see [pkg/index/language\_detection.go](https://github.com/QwantResearch/cozy-stack/blob/Index/pkg/fulltext/indexation/language\_detection.go)).
 
 For now, we predict the language based on the document name only, except if the document is a file, then we predict on the content.
 
@@ -155,17 +162,17 @@ The IndexWrapper code is at [pkg/fulltext/indexation/index_wrapper.go](https://g
 To allow to manipulate the store underlying the bleve indexes, we create an `IndexWrapper` struct that contains a single `bleve.Index` field.
 The wrapper implements setter and getter for the sequence number, the md5sum value (for file content) and the mapping version used (based on last modification time).
 
-For example, the `setStoreSeq()` and `getStoreSeq()` functions are used to store and retrieve the sequence number associated with an index, so that we can fetch the changes since this last sequence number.
+For example, the `setStoreSeq()` and `getStoreSeq()` methods are used to store and retrieve the sequence number associated with an index, so that we can fetch the changes since this last sequence number.
 
-In order to store the sequence number directly in the index, we use the bleve `SetInternal()` function that allows us to store additional information into the store, without it being taken into account in the index.
+In order to store the sequence number directly in the index, we use the bleve `SetInternal()` method that allows us to store additional information into the store, without it being taken into account in the index.
 
-The `GetInteral()` function allows us to retrieve this information. 
+The `GetInteral()` method allows us to retrieve this information. 
 
 ### Reindex
 
-The `indexController.ReIndexAll()` function takes an instance name as argument and calls `instanceIndex.ReIndex()` on all the docTypes that exist in the mapping description folder.
+The `indexController.ReIndexAll()` method takes an instance name as argument and calls `instanceIndex.ReIndex()` on all the docTypes that exist in the mapping description folder.
 
-The `instanceIndex.ReIndex()` function removes the index from the disk (if found) and creates a new one.
+The `instanceIndex.ReIndex()` method removes the index from the disk (if found) and creates a new one.
 
 In order to reindex, it starts by making sure that an `InstanceIndex` object is initialized for this instance. 
 Then it checks whether this particular doctype index existed in this instance. If this is the case, it removes it calling `deleteIndex()`. 
@@ -174,21 +181,23 @@ Finally, it adds an update job for this couple `(instance, doctype, retrycount=0
 
 ### Replicate
 
-The `indexController.ReplicateAll()` function calls `instanceIndex.ReplicateAll()` for the appropriate instance, and this one calls `instanceIndex.Replicate()` on each index.
+The `indexController.ReplicateAll()` method calls `instanceIndex.ReplicateAll()` for the appropriate instance, and this one calls `instanceIndex.Replicate()` on each index.
 
-`Replicate()` obtains an `io.Writer` from the specified path. Next, it uses the `.Advanced()` function from bleve to access the store and get a reader. Then, it uses the `WriteTo()` function implemented in the Index branch of the repository [QwantResearch/bleve](https://github.com/QwantResearch/bleve/tree/Index) and writes into a tmp file.
+`Replicate()` obtains an `io.Writer` from the specified path. Next, it uses the `.Advanced()` method from bleve to access the store and get a reader. Then, it uses the `WriteTo()` method implemented in the Index branch of the repository [QwantResearch/bleve](https://github.com/QwantResearch/bleve/tree/Index) and writes into a tmp file.
 
-This `WriteTo()` function was implemented for BoltDB only. It uses the `tx.WriteTo()` function from the store. From the BoltDB documentation : 
+This `WriteTo()` method was implemented for BoltDB only. It uses the `tx.WriteTo()` method from the store. From the BoltDB documentation : 
 > You can use the Tx.WriteTo() function to write a consistent view of the database to a writer. If you call this from a read-only transaction, it will perform a hot backup and not block your other database reads and writes.
+
+Depending on the chosen implementation, it might be needed to use dynamic type casting to boltdb.Reader to access its WriteTo() method.
 
 Finally, it closes the file and the reader and returns the file name.
 
 ### Delete
 
-The `indexController.DeleteAllIndexesInstance()` function calls `instanceIndex.DeleteAllIndexes`, that will call `deleteIndex()` on each docType from the instance name passed as argument. 
+The `indexController.DeleteAllIndexesInstance()` method calls `instanceIndex.DeleteAllIndexes`, that will call `deleteIndex()` on each docType from the instance name passed as argument. 
 It then removes the instance from the `indexController.indexes` var and remove all indexes from the disk calling `os.RemoveAll()`. 
 
-The `indexController.DeleteIndex()` calls the `instanceIndex.deleteIndex()` function that removes the index for a particular doctype. It closes the indexes for all langs and then removes the indexes from the disk. 
+The `indexController.DeleteIndex()` calls the `instanceIndex.deleteIndex()` method that removes the index for a particular doctype. It closes the indexes for all langs and then removes the indexes from the disk. 
 If `querySide` is set to true, it calls `instanceIndex.notifyDeleteIndexQuery()` the query side to remove the index. Finally it removes the doctype for this instance in the `indexList` var.
 
 The `notifyDeleteIndexQuery()` sends a http POST request to tell the query side to remove a particular index, using the `/fulltext/_delete_index_query/` route.
